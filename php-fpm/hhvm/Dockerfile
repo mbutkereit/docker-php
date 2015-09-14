@@ -1,0 +1,2 @@
+FROM diegomarangoni/hhvm:fastcgi
+
