@@ -35,6 +35,18 @@
 #include "xdebug_var.h"
 #include "xdebug_xml.h"
 
+/* Set correct int format to use */
+#if PHP_VERSION_ID >= 70000
+# include "Zend/zend_long.h"
+# if SIZEOF_ZEND_LONG == 4
+#  define XDEBUG_INT_FMT "%ld"
+# else
+#  define XDEBUG_INT_FMT "%lld"
+# endif
+#else
+# define XDEBUG_INT_FMT "%ld"
+#endif
+
 ZEND_EXTERN_MODULE_GLOBALS(xdebug)
 
 HashTable *xdebug_objdebug_pp(zval **zval_pp, int *is_tmp TSRMLS_DC)
@@ -44,11 +56,22 @@ HashTable *xdebug_objdebug_pp(zval **zval_pp, int *is_tmp TSRMLS_DC)
 
 	if (!XG(in_debug_info) && Z_OBJ_HANDLER(dzval, get_debug_info)) {
 		zend_bool old_trace = XG(do_trace);
+#if PHP_VERSION_ID >= 70000
+		zend_object *orig_exception;
+#else
+		zval *orig_exception;
+#endif
+
 		XG(do_trace) = 0;
 		XG(in_debug_info) = 1;
+		orig_exception = EG(exception);
+		EG(exception) = NULL;
+
 		tmp = Z_OBJ_HANDLER(dzval, get_debug_info)(&dzval, is_tmp TSRMLS_CC);
+
 		XG(in_debug_info) = 0;
 		XG(do_trace) = old_trace;
+		EG(exception) = orig_exception;
 		return tmp;
 	} else {
 		*is_tmp = 0;
@@ -220,11 +243,6 @@ zval *xdebug_get_zval(zend_execute_data *zdata, int node_type, const znode_op *n
 
 inline static HashTable *fetch_ht_from_zval(zval *z TSRMLS_DC)
 {
-#if PHP_VERSION_ID >= 70000
-	if (Z_TYPE_P(z) == IS_REFERENCE) {
-		z = &z->value.ref->val;
-	}
-#endif
 	switch (Z_TYPE_P(z)) {
 		case IS_ARRAY:
 			return Z_ARRVAL_P(z);
@@ -240,6 +258,13 @@ inline static HashTable *fetch_ht_from_zval(zval *z TSRMLS_DC)
 inline static char *fetch_classname_from_zval(zval *z, int *length, zend_class_entry **ce TSRMLS_DC)
 {
 	zend_string *class_name;
+
+	if (Z_TYPE_P(z) == IS_INDIRECT) {
+		z = z->value.zv;
+	}
+	if (Z_TYPE_P(z) == IS_REFERENCE) {
+		z = &z->value.ref->val;
+	}
 
 	if (Z_TYPE_P(z) != IS_OBJECT) {
 		return NULL;
@@ -382,6 +407,15 @@ static zval* fetch_zval_from_symbol_table(zval *parent, char* name, unsigned int
 	zend_property_info *zpp;
 
 	if (parent) {
+#if PHP_VERSION_ID >= 70000
+		if (Z_TYPE_P(parent) == IS_INDIRECT) {
+			parent = parent->value.zv;
+		}
+		if (Z_TYPE_P(parent) == IS_REFERENCE) {
+			parent = &parent->value.ref->val;
+		}
+#endif
+
 		ht = fetch_ht_from_zval(parent TSRMLS_CC);
 	}
 
@@ -567,7 +601,7 @@ static zval* fetch_zval_from_symbol_table(zval *parent, char* name, unsigned int
 				goto cleanup;
 			}
 			element_length = name_length;
-					
+
 			/* All right, time for a mega hack. It's SplObjectStorage access time! */
 			if (strncmp(ccn, "SplObjectStorage", ccnl) == 0 && strncmp(name, "storage", name_length) == 0) {
 				element = NULL;
@@ -625,6 +659,7 @@ cleanup:
 	if (element) {
 		free(element);
 	}
+
 	return retval_p;
 }
 
@@ -893,7 +928,7 @@ xdebug_var_export_options* xdebug_var_get_nolimit_options(TSRMLS_D)
 */
 
 #if PHP_VERSION_ID >= 70000
-static int xdebug_array_element_export(zval *zv_nptr, zend_ulong index, zend_string *hash_key, int level, xdebug_str *str, int debug_zval, xdebug_var_export_options *options)
+static int xdebug_array_element_export(zval *zv_nptr, zend_ulong index_key, zend_string *hash_key, int level, xdebug_str *str, int debug_zval, xdebug_var_export_options *options)
 {
 	zval **zv = &zv_nptr;
 #else
@@ -908,11 +943,15 @@ static int xdebug_array_element_export(zval **zv TSRMLS_DC, int num_args, va_lis
 		options->runtime[level].current_element_nr < options->runtime[level].end_element_nr)
 	{
 		if (HASH_KEY_IS_NUMERIC(hash_key)) { /* numeric key */
-			xdebug_str_add(str, xdebug_sprintf("%ld => ", HASH_APPLY_NUMERIC(hash_key)), 1);
+#if PHP_VERSION_ID >= 70000
+			xdebug_str_add(str, xdebug_sprintf(XDEBUG_INT_FMT " => ", index_key), 1);
+#else
+			xdebug_str_add(str, xdebug_sprintf(XDEBUG_INT_FMT " => ", HASH_APPLY_NUMERIC(hash_key)), 1);
+#endif
 		} else { /* string key */
 			SIZETorINT newlen = 0;
 			char *tmp, *tmp2;
-			
+
 			tmp = xdebug_str_to_str((char*) HASH_APPLY_KEY_VAL(hash_key), HASH_APPLY_KEY_LEN(hash_key), "'", 1, "\\'", 2, &newlen);
 			tmp2 = xdebug_str_to_str(tmp, newlen - 1, "\0", 1, "\\0", 2, &newlen);
 			if (tmp) {
@@ -936,7 +975,7 @@ static int xdebug_array_element_export(zval **zv TSRMLS_DC, int num_args, va_lis
 }
 
 #if PHP_VERSION_ID >= 70000
-static int xdebug_object_element_export(zval *zv_nptr, zend_ulong index, zend_string *hash_key, int level, xdebug_str *str, int debug_zval, xdebug_var_export_options *options, char *class_name)
+static int xdebug_object_element_export(zval *zv_nptr, zend_ulong index_key, zend_string *hash_key, int level, xdebug_str *str, int debug_zval, xdebug_var_export_options *options, char *class_name)
 {
 	zval **zv = &zv_nptr;
 #else
@@ -965,7 +1004,11 @@ static int xdebug_object_element_export(zval **zv TSRMLS_DC, int num_args, va_li
 			xdfree(prop_name);
 			xdfree(prop_class_name);
 		} else {
+#if PHP_VERSION_ID >= 70000
+			xdebug_str_add(str, xdebug_sprintf("public $%d = ", index_key), 1);
+#else
 			xdebug_str_add(str, xdebug_sprintf("public $%d = ", HASH_APPLY_NUMERIC(hash_key)), 1);
+#endif
 		}
 		xdebug_var_export(zv, str, level + 2, debug_zval, options TSRMLS_CC);
 		xdebug_str_addl(str, "; ", 2, 0);
@@ -1028,7 +1071,7 @@ void xdebug_var_export(zval **struc, xdebug_str *str, int level, int debug_zval,
 			break;
 
 		case IS_LONG:
-			xdebug_str_add(str, xdebug_sprintf("%ld", Z_LVAL_P(*struc)), 1);
+			xdebug_str_add(str, xdebug_sprintf(XDEBUG_INT_FMT, Z_LVAL_P(*struc)), 1);
 			break;
 
 		case IS_DOUBLE:
@@ -1312,7 +1355,7 @@ char* xdebug_get_zval_synopsis(zval *val, int debug_zval, xdebug_var_export_opti
 #define ANSI_COLOR_BOLD_OFF      (mode == 1 ? "[22m" : "")
 
 #if PHP_VERSION_ID >= 70000
-static int xdebug_array_element_export_text_ansi(zval *zv_nptr, zend_ulong index, zend_string *hash_key, int level, int mode, xdebug_str *str, int debug_zval, xdebug_var_export_options *options)
+static int xdebug_array_element_export_text_ansi(zval *zv_nptr, zend_ulong index_key, zend_string *hash_key, int level, int mode, xdebug_str *str, int debug_zval, xdebug_var_export_options *options)
 {
 	zval **zv = &zv_nptr;
 #else
@@ -1331,11 +1374,15 @@ static int xdebug_array_element_export_text_ansi(zval **zv TSRMLS_DC, int num_ar
 		xdebug_str_add(str, xdebug_sprintf("%*s", (level * 2), ""), 1);
 
 		if (HASH_KEY_IS_NUMERIC(hash_key)) { /* numeric key */
-			xdebug_str_add(str, xdebug_sprintf("[%ld] %s=>%s\n", HASH_APPLY_NUMERIC(hash_key), ANSI_COLOR_POINTER, ANSI_COLOR_RESET), 1);
+#if PHP_VERSION_ID >= 70000
+			xdebug_str_add(str, xdebug_sprintf("[" XDEBUG_INT_FMT "] %s=>%s\n", index_key, ANSI_COLOR_POINTER, ANSI_COLOR_RESET), 1);
+#else
+			xdebug_str_add(str, xdebug_sprintf("[" XDEBUG_INT_FMT "] %s=>%s\n", HASH_APPLY_NUMERIC(hash_key), ANSI_COLOR_POINTER, ANSI_COLOR_RESET), 1);
+#endif
 		} else { /* string key */
 			SIZETorINT newlen = 0;
 			char *tmp, *tmp2;
-			
+
 			tmp = xdebug_str_to_str((char*) HASH_APPLY_KEY_VAL(hash_key), HASH_APPLY_KEY_LEN(hash_key), "'", 1, "\\'", 2, &newlen);
 			tmp2 = xdebug_str_to_str(tmp, newlen - 1, "\0", 1, "\\0", 2, &newlen);
 			if (tmp) {
@@ -1358,7 +1405,7 @@ static int xdebug_array_element_export_text_ansi(zval **zv TSRMLS_DC, int num_ar
 }
 
 #if PHP_VERSION_ID >= 70000
-static int xdebug_object_element_export_text_ansi(zval *zv_nptr, zend_ulong index, zend_string *hash_key, int level, int mode, xdebug_str *str, int debug_zval, xdebug_var_export_options *options)
+static int xdebug_object_element_export_text_ansi(zval *zv_nptr, zend_ulong index_key, zend_string *hash_key, int level, int mode, xdebug_str *str, int debug_zval, xdebug_var_export_options *options)
 {
 	zval **zv = &zv_nptr;
 #else
@@ -1381,15 +1428,19 @@ static int xdebug_object_element_export_text_ansi(zval **zv TSRMLS_DC, int num_a
 
 			modifier = xdebug_get_property_info((char*) HASH_APPLY_KEY_VAL(hash_key), HASH_APPLY_KEY_LEN(hash_key), &prop_name, &class_name);
 			xdebug_str_add(str, xdebug_sprintf("%s%s%s%s%s $%s %s=>%s\n",
-			               ANSI_COLOR_MODIFIER, ANSI_COLOR_BOLD, modifier, ANSI_COLOR_BOLD_OFF, ANSI_COLOR_RESET, 
+			               ANSI_COLOR_MODIFIER, ANSI_COLOR_BOLD, modifier, ANSI_COLOR_BOLD_OFF, ANSI_COLOR_RESET,
 			               prop_name, ANSI_COLOR_POINTER, ANSI_COLOR_RESET), 1);
 
 			xdfree(prop_name);
 			xdfree(class_name);
 		} else {
 			xdebug_str_add(str, xdebug_sprintf("%s%spublic%s%s ${%d} %s=>%s\n",
-			               ANSI_COLOR_MODIFIER, ANSI_COLOR_BOLD, ANSI_COLOR_BOLD_OFF, ANSI_COLOR_RESET, 
+			               ANSI_COLOR_MODIFIER, ANSI_COLOR_BOLD, ANSI_COLOR_BOLD_OFF, ANSI_COLOR_RESET,
+#if PHP_VERSION_ID >= 70000
+			               index_key, ANSI_COLOR_POINTER, ANSI_COLOR_RESET), 1);
+#else
 			               HASH_APPLY_NUMERIC(hash_key), ANSI_COLOR_POINTER, ANSI_COLOR_RESET), 1);
+#endif
 		}
 		xdebug_var_export_text_ansi(zv, str, mode, level + 1, debug_zval, options TSRMLS_CC);
 	}
@@ -1416,7 +1467,7 @@ void xdebug_var_export_text_ansi(zval **struc, xdebug_str *str, int mode, int le
 	if (!struc || !(*struc)) {
 		return;
 	}
-	
+
 	xdebug_str_add(str, xdebug_sprintf("%*s", (level * 2) - 2, ""), 1);
 
 #if PHP_VERSION_ID >= 70000
@@ -1453,7 +1504,7 @@ void xdebug_var_export_text_ansi(zval **struc, xdebug_str *str, int mode, int le
 			break;
 
 		case IS_LONG:
-			xdebug_str_add(str, xdebug_sprintf("%sint%s(%s%ld%s)", ANSI_COLOR_BOLD, ANSI_COLOR_BOLD_OFF, ANSI_COLOR_LONG, Z_LVAL_P(*struc), ANSI_COLOR_RESET), 1);
+			xdebug_str_add(str, xdebug_sprintf("%sint%s(%s" XDEBUG_INT_FMT "%s)", ANSI_COLOR_BOLD, ANSI_COLOR_BOLD_OFF, ANSI_COLOR_LONG, Z_LVAL_P(*struc), ANSI_COLOR_RESET), 1);
 			break;
 
 		case IS_DOUBLE:
@@ -1741,12 +1792,12 @@ typedef struct
 	char  type;
 	char *name;
 	int   name_len;
-	ulong index;
+	ulong index_key;
 	zval *zv;
 } xdebug_object_item;
 
 #if PHP_VERSION_ID >= 70000
-static int object_item_add_to_merged_hash(zval *zv_nptr, zend_ulong index, zend_string *hash_key, HashTable *merged, int object_type)
+static int object_item_add_to_merged_hash(zval *zv_nptr, zend_ulong index_key, zend_string *hash_key, HashTable *merged, int object_type)
 {
 	zval **zv = &zv_nptr;
 #else
@@ -1764,15 +1815,15 @@ static int object_item_add_to_merged_hash(zval **zv TSRMLS_DC, int num_args, va_
 	if (hash_key) {
 		item->name = (char*) HASH_APPLY_KEY_VAL(hash_key);
 		item->name_len = HASH_APPLY_KEY_LEN(hash_key) - 1;
-		item->index = hash_key->h;
+		item->index_key = hash_key->h;
 	} else {
-		item->name = xdebug_sprintf("%ld", index);
+		item->name = xdebug_sprintf(XDEBUG_INT_FMT, index_key);
 		item->name_len = strlen(item->name);
 	}
 #else
 	item->name = (char*) HASH_APPLY_KEY_VAL(hash_key);
 	item->name_len = HASH_APPLY_KEY_LEN(hash_key);
-	item->index = hash_key->h;
+	item->index_key = hash_key->h;
 #endif
 
 #if PHP_VERSION_ID >= 70000
@@ -1838,7 +1889,7 @@ static int object_item_add_zend_prop_to_merged_hash(zend_property_info *zpp TSRM
 #endif
 
 #if PHP_VERSION_ID >= 70000
-static int xdebug_array_element_export_xml_node(zval *zv_nptr, zend_ulong index, zend_string *hash_key, int level, xdebug_xml_node *parent, char *parent_name, xdebug_var_export_options *options)
+static int xdebug_array_element_export_xml_node(zval *zv_nptr, zend_ulong index_key, zend_string *hash_key, int level, xdebug_xml_node *parent, char *parent_name, xdebug_var_export_options *options)
 {
 	zval **zv = &zv_nptr;
 #else
@@ -1858,7 +1909,7 @@ static int xdebug_array_element_export_xml_node(zval **zv TSRMLS_DC, int num_arg
 		options->runtime[level].current_element_nr < options->runtime[level].end_element_nr)
 	{
 		node = xdebug_xml_node_init("property");
-	
+
 		if (!HASH_KEY_IS_NUMERIC(hash_key)) { /* string key */
 			name = xdstrndup(HASH_APPLY_KEY_VAL(hash_key), HASH_APPLY_KEY_LEN(hash_key));
 			name_len = HASH_APPLY_KEY_LEN(hash_key) - 1;
@@ -1869,7 +1920,11 @@ static int xdebug_array_element_export_xml_node(zval **zv TSRMLS_DC, int num_arg
 				xdebug_str_addl(&full_name, "']", 2, 0);
 			}
 		} else {
-			name = xdebug_sprintf("%ld", HASH_APPLY_NUMERIC(hash_key));
+#if PHP_VERSION_ID >= 70000
+			name = xdebug_sprintf(XDEBUG_INT_FMT, index_key);
+#else
+			name = xdebug_sprintf(XDEBUG_INT_FMT, HASH_APPLY_NUMERIC(hash_key));
+#endif
 			name_len = strlen(name);
 			if (parent_name) {
 				xdebug_str_add(&full_name, xdebug_sprintf("%s[%s]", parent_name, name), 1);
@@ -1889,7 +1944,7 @@ static int xdebug_array_element_export_xml_node(zval **zv TSRMLS_DC, int num_arg
 }
 
 #if PHP_VERSION_ID >= 70000
-static int xdebug_object_element_export_xml_node(xdebug_object_item *item_nptr, zend_ulong index, zend_string *hash_key, int level, xdebug_xml_node *parent, char *parent_name, xdebug_var_export_options *options, char *class_name)
+static int xdebug_object_element_export_xml_node(xdebug_object_item *item_nptr, zend_ulong index_key, zend_string *hash_key, int level, xdebug_xml_node *parent, char *parent_name, xdebug_var_export_options *options, char *class_name)
 {
 	xdebug_object_item **item = &item_nptr;
 #else
@@ -1940,10 +1995,10 @@ static int xdebug_object_element_export_xml_node(xdebug_object_item **item TSRML
 		} else { /* Numerical property name */
 			modifier = "public";
 
-			xdebug_xml_add_attribute_ex(node, "name", xdebug_sprintf("%ld", (*item)->index), 0, 1);
+			xdebug_xml_add_attribute_ex(node, "name", xdebug_sprintf(XDEBUG_INT_FMT, (*item)->index_key), 0, 1);
 
 			if (parent_name) {
-				full_name = xdebug_sprintf("%s%s%ld", parent_name, (*item)->type == XDEBUG_OBJECT_ITEM_TYPE_STATIC_PROPERTY ? "::" : "->", (*item)->index);
+				full_name = xdebug_sprintf("%s%s" XDEBUG_INT_FMT, parent_name, (*item)->type == XDEBUG_OBJECT_ITEM_TYPE_STATIC_PROPERTY ? "::" : "->", (*item)->index_key);
 				xdebug_xml_add_attribute_ex(node, "fullname", full_name, 0, 1);
 			}
 		}
@@ -2107,7 +2162,7 @@ void xdebug_var_export_xml_node(zval **struc, char *name, xdebug_xml_node *node,
 
 		case IS_LONG:
 			xdebug_xml_add_attribute(node, "type", "int");
-			xdebug_xml_add_text(node, xdebug_sprintf("%ld", Z_LVAL_P(*struc)));
+			xdebug_xml_add_text(node, xdebug_sprintf(XDEBUG_INT_FMT, Z_LVAL_P(*struc)));
 			break;
 
 		case IS_DOUBLE:
@@ -2315,7 +2370,7 @@ xdebug_xml_node* xdebug_get_zval_value_xml_node_ex(char *name, zval *val, int va
 #define COLOR_RESOURCE  "#2e3436"
 
 #if PHP_VERSION_ID >= 70000
-static int xdebug_array_element_export_fancy(zval *zv_nptr, zend_ulong index, zend_string *hash_key, int level, xdebug_str *str, int debug_zval, xdebug_var_export_options *options)
+static int xdebug_array_element_export_fancy(zval *zv_nptr, zend_ulong index_key, zend_string *hash_key, int level, xdebug_str *str, int debug_zval, xdebug_var_export_options *options)
 {
 	zval **zv = &zv_nptr;
 #else
@@ -2335,7 +2390,11 @@ static int xdebug_array_element_export_fancy(zval **zv TSRMLS_DC, int num_args, 
 		xdebug_str_add(str, xdebug_sprintf("%*s", (level * 4) - 2, ""), 1);
 
 		if (HASH_KEY_IS_NUMERIC(hash_key)) { /* numeric key */
-			xdebug_str_add(str, xdebug_sprintf("%ld <font color='%s'>=&gt;</font> ", HASH_APPLY_NUMERIC(hash_key), COLOR_POINTER), 1);
+#if PHP_VERSION_ID >= 70000
+			xdebug_str_add(str, xdebug_sprintf(XDEBUG_INT_FMT " <font color='%s'>=&gt;</font> ", index_key, COLOR_POINTER), 1);
+#else
+			xdebug_str_add(str, xdebug_sprintf(XDEBUG_INT_FMT " <font color='%s'>=&gt;</font> ", HASH_APPLY_NUMERIC(hash_key), COLOR_POINTER), 1);
+#endif
 		} else { /* string key */
 			xdebug_str_addl(str, "'", 1, 0);
 			tmp_str = xdebug_xmlize((char*) HASH_APPLY_KEY_VAL(hash_key), HASH_APPLY_KEY_LEN(hash_key) - 1, &newlen);
@@ -2354,7 +2413,7 @@ static int xdebug_array_element_export_fancy(zval **zv TSRMLS_DC, int num_args, 
 }
 
 #if PHP_VERSION_ID >= 70000
-static int xdebug_object_element_export_fancy(zval *zv_nptr, zend_ulong index, zend_string *hash_key, int level, xdebug_str *str, int debug_zval, xdebug_var_export_options *options, char *class_name)
+static int xdebug_object_element_export_fancy(zval *zv_nptr, zend_ulong index_key, zend_string *hash_key, int level, xdebug_str *str, int debug_zval, xdebug_var_export_options *options, char *class_name)
 {
 	zval **zv = &zv_nptr;
 #else
@@ -2385,7 +2444,11 @@ static int xdebug_object_element_export_fancy(zval **zv TSRMLS_DC, int num_args,
 			xdfree(prop_name);
 			xdfree(prop_class_name);
 		} else {
+#if PHP_VERSION_ID >= 70000
+			xdebug_str_add(str, xdebug_sprintf("<i>public</i> %d <font color='%s'>=&gt;</font> ", index_key, COLOR_POINTER), 1);
+#else
 			xdebug_str_add(str, xdebug_sprintf("<i>public</i> %d <font color='%s'>=&gt;</font> ", HASH_APPLY_NUMERIC(hash_key), COLOR_POINTER), 1);
+#endif
 		}
 		xdebug_var_export_fancy(zv, str, level + 1, debug_zval, options TSRMLS_CC);
 	}
@@ -2445,7 +2508,7 @@ void xdebug_var_export_fancy(zval **struc, xdebug_str *str, int level, int debug
 			break;
 
 		case IS_LONG:
-			xdebug_str_add(str, xdebug_sprintf("<small>int</small> <font color='%s'>%ld</font>", COLOR_LONG, Z_LVAL_P(*struc)), 1);
+			xdebug_str_add(str, xdebug_sprintf("<small>int</small> <font color='%s'>" XDEBUG_INT_FMT "</font>", COLOR_LONG, Z_LVAL_P(*struc)), 1);
 			break;
 
 		case IS_DOUBLE:
@@ -2604,7 +2667,11 @@ char* xdebug_get_zval_value_serialized(zval *val, int debug_zval, xdebug_var_exp
 	zend_object *orig_exception = EG(exception);
 #endif
 	php_serialize_data_t var_hash;
-	smart_str buf = {0};
+#if PHP_VERSION_ID >= 70000
+	smart_str buf = { 0, 0 };
+#else
+	smart_str buf = { 0, 0, 0 };
+#endif
 
 	if (!val) {
 		return NULL;
@@ -2856,7 +2923,7 @@ char* xdebug_show_fname(xdebug_func f, int html, int flags TSRMLS_DC)
 				);
 			}
 			break;
-		}	
+		}
 
 		case XFUNC_EVAL:
 			return xdstrdup("eval");
@@ -2878,8 +2945,11 @@ char* xdebug_show_fname(xdebug_func f, int html, int flags TSRMLS_DC)
 			return xdstrdup("require_once");
 			break;
 
+		case XFUNC_ZEND_PASS:
+			return xdstrdup("{zend_pass}");
+			break;
+
 		default:
 			return xdstrdup("{unknown}");
 	}
 }
-

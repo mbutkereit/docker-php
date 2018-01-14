@@ -217,7 +217,7 @@ void xdebug_trace_textual_function_entry(void *ctxt, function_stack_entry *fse, 
 	}
 
 	xdebug_str_add(&str, xdebug_sprintf(") %s:%d\n", fse->filename, fse->lineno), 1);
-	
+
 	fprintf(context->trace_file, "%s", str.d);
 	fflush(context->trace_file);
 
@@ -268,6 +268,16 @@ void xdebug_trace_textual_generator_return_value(void *ctxt, function_stack_entr
 	xdebug_trace_textual_context *context = (xdebug_trace_textual_context*) ctxt;
 	xdebug_str str = XDEBUG_STR_INITIALIZER;
 	char      *tmp_value = NULL;
+
+	if (! (generator->flags & ZEND_GENERATOR_CURRENTLY_RUNNING)) {
+		return;
+	}
+
+#if PHP_VERSION_ID >= 70000
+	if (generator->node.ptr.root->execute_data == NULL) {
+		return;
+	}
+#endif
 
 	/* Generator key */
 #if PHP_VERSION_ID >= 70000

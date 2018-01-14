@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | Xdebug                                                               |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2002-2016 Derick Rethans                               |
+   | Copyright (c) 2002-2017 Derick Rethans                               |
    +----------------------------------------------------------------------+
    | This source file is subject to version 1.0 of the Xdebug license,    |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -20,10 +20,10 @@
 #define PHP_XDEBUG_H
 
 #define XDEBUG_NAME       "Xdebug"
-#define XDEBUG_VERSION    "2.4.0"
+#define XDEBUG_VERSION    "2.6.0beta1"
 #define XDEBUG_AUTHOR     "Derick Rethans"
-#define XDEBUG_COPYRIGHT  "Copyright (c) 2002-2016 by Derick Rethans"
-#define XDEBUG_COPYRIGHT_SHORT "Copyright (c) 2002-2016"
+#define XDEBUG_COPYRIGHT  "Copyright (c) 2002-2017 by Derick Rethans"
+#define XDEBUG_COPYRIGHT_SHORT "Copyright (c) 2002-2017"
 #define XDEBUG_URL        "http://xdebug.org"
 #define XDEBUG_URL_FAQ    "http://xdebug.org/docs/faq#api"
 
@@ -82,6 +82,7 @@ PHP_FUNCTION(xdebug_call_file);
 PHP_FUNCTION(xdebug_call_line);
 
 PHP_FUNCTION(xdebug_set_time_limit);
+PHP_FUNCTION(xdebug_pcntl_exec);
 
 PHP_FUNCTION(xdebug_var_dump);
 PHP_FUNCTION(xdebug_debug_zval);
@@ -93,6 +94,7 @@ PHP_FUNCTION(xdebug_disable);
 PHP_FUNCTION(xdebug_is_enabled);
 
 /* breaking functions */
+PHP_FUNCTION(xdebug_is_debugger_active);
 PHP_FUNCTION(xdebug_break);
 
 /* tracing functions */
@@ -122,17 +124,20 @@ PHP_FUNCTION(xdebug_memory_usage);
 PHP_FUNCTION(xdebug_peak_memory_usage);
 PHP_FUNCTION(xdebug_time_index);
 
+/* filter functions */
+PHP_FUNCTION(xdebug_set_filter);
+
 ZEND_BEGIN_MODULE_GLOBALS(xdebug)
 	int           status;
 	int           reason;
 
 	unsigned long level;
 	xdebug_llist *stack;
-	iniLONG       max_nesting_level;
-	iniLONG       max_stack_frames;
+	zend_long     max_nesting_level;
+	zend_long     max_stack_frames;
 	zend_bool     default_enable;
 	zend_bool     collect_includes;
-	iniLONG       collect_params;
+	zend_long     collect_params;
 	zend_bool     collect_return;
 	zend_bool     collect_vars;
 	zend_bool     collect_assignments;
@@ -148,13 +153,15 @@ ZEND_BEGIN_MODULE_GLOBALS(xdebug)
 	function_stack_entry *active_fse;
 	unsigned int  prev_memory;
 	char         *file_link_format;
+	char         *filename_format;
 	zend_bool     force_display_errors;
-	iniLONG       force_error_reporting;
-	iniLONG       halt_level;
+	zend_long     force_error_reporting;
+	zend_long     halt_level;
 
-	zend_bool     overload_var_dump;
+	zend_long     overload_var_dump;
 	void        (*orig_var_dump_func)(INTERNAL_FUNCTION_PARAMETERS);
 	void        (*orig_set_time_limit_func)(INTERNAL_FUNCTION_PARAMETERS);
+	void        (*orig_pcntl_exec_func)(INTERNAL_FUNCTION_PARAMETERS);
 
 	xdebug_trace_handler_t *trace_handler;
 	void         *trace_context;
@@ -165,16 +172,16 @@ ZEND_BEGIN_MODULE_GLOBALS(xdebug)
 	char         *trace_enable_trigger_value;
 	char         *trace_output_dir;
 	char         *trace_output_name;
-	iniLONG       trace_options;
-	iniLONG       trace_format;
+	zend_long     trace_options;
+	zend_long     trace_format;
 	char         *last_exception_trace;
 	char         *last_eval_statement;
 	zend_bool     in_debug_info;
 
 	/* variable dumping limitation settings */
-	iniLONG       display_max_children;
-	iniLONG       display_max_data;
-	iniLONG       display_max_depth;
+	zend_long     display_max_children;
+	zend_long     display_max_data;
+	zend_long     display_max_depth;
 
 	zend_bool     cli_color;
 	int           output_is_tty;
@@ -189,6 +196,7 @@ ZEND_BEGIN_MODULE_GLOBALS(xdebug)
 	unsigned int  function_count;
 	int           dead_code_analysis_tracker_offset;
 	long          dead_code_last_start_id;
+	long          code_coverage_filter_offset;
 	char                 *previous_filename;
 	xdebug_coverage_file *previous_file;
 	char                 *previous_mark_filename;
@@ -228,7 +236,7 @@ ZEND_BEGIN_MODULE_GLOBALS(xdebug)
 
 	/* remote settings */
 	zend_bool     remote_enable;  /* 0 */
-	iniLONG       remote_port;    /* 9000 */
+	zend_long     remote_port;    /* 9000 */
 	char         *remote_host;    /* localhost */
 	long          remote_mode;    /* XDEBUG_NONE, XDEBUG_JIT, XDEBUG_REQ */
 	char         *remote_handler; /* php3, gdb, dbgp */
@@ -236,8 +244,9 @@ ZEND_BEGIN_MODULE_GLOBALS(xdebug)
 	zend_bool     remote_connect_back;   /* connect back to the HTTP requestor */
 	char         *remote_log;       /* Filename to log protocol communication to */
 	FILE         *remote_log_file;  /* File handler for protocol log */
-	iniLONG       remote_cookie_expire_time; /* Expire time for the remote-session cookie */
+	zend_long     remote_cookie_expire_time; /* Expire time for the remote-session cookie */
 	char         *remote_addr_header; /* User configured header to check for forwarded IP address */
+	zend_long     remote_connect_timeout; /* Timeout in MS for remote connections */
 
 	char         *ide_key; /* As Xdebug uses it, from environment, USER, USERNAME or empty */
 	char         *ide_key_setting; /* Set through php.ini and friends */
@@ -284,6 +293,13 @@ ZEND_BEGIN_MODULE_GLOBALS(xdebug)
 	/* in-execution checking */
 	zend_bool  in_execution;
 	zend_bool  in_var_serialisation;
+
+	/* filters */
+	zend_long     filter_type_tracing;
+	zend_long     filter_type_profiler;
+	zend_long     filter_type_code_coverage;
+	xdebug_llist *filters_tracing;
+	xdebug_llist *filters_code_coverage;
 ZEND_END_MODULE_GLOBALS(xdebug)
 
 #ifdef ZTS
@@ -291,7 +307,7 @@ ZEND_END_MODULE_GLOBALS(xdebug)
 #else
 #define XG(v) (xdebug_globals.v)
 #endif
-	
+
 #endif
 
 

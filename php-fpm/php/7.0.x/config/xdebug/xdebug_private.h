@@ -63,6 +63,8 @@ typedef struct xdebug_var {
 #define XFUNC_REQUIRE        0x13
 #define XFUNC_REQUIRE_ONCE   0x14
 
+#define XFUNC_ZEND_PASS      0x20
+
 #define XDEBUG_IS_FUNCTION(f) (f == XFUNC_NORMAL || f == XFUNC_STATIC_MEMBER || f == XFUNC_MEMBER)
 
 #define XDEBUG_REGISTER_LONG_CONSTANT(__c) REGISTER_LONG_CONSTANT(#__c, __c, CONST_CS|CONST_PERSISTENT)
@@ -127,7 +129,7 @@ typedef struct xdebug_var {
 
 #define XDEBUG_ERROR_ENCODING_NOT_SUPPORTED        900
 
-#define ZEND_XDEBUG_VISITED 0x1000000
+#define ZEND_XDEBUG_VISITED 0x10000000
 
 typedef struct _xdebug_func {
 	char *class;
@@ -173,6 +175,7 @@ typedef struct _function_stack_entry {
 	char        *filename;
 	int          lineno;
 	char        *include_filename;
+	int          function_nr;
 
 	/* argument properties */
 	int          arg_done;
@@ -194,10 +197,11 @@ typedef struct _function_stack_entry {
 
 	/* profiling properties */
 	xdebug_profile profile;
-#if 0
-	double       time_taken;	
-	unsigned int f_calls;
-#endif
+	struct {
+		int   lineno;
+		char *filename;
+		char *funcname;
+	} profiler;
 
 	/* misc properties */
 	int          refcount;

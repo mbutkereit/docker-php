@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | Xdebug                                                               |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2002-2016 Derick Rethans                               |
+   | Copyright (c) 2002-2017 Derick Rethans                               |
    +----------------------------------------------------------------------+
    | This source file is subject to version 1.0 of the Xdebug license,    |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -29,6 +29,7 @@
 #include "ext/standard/php_string.h"
 #include "ext/standard/url.h"
 #include "main/php_version.h"
+#include "main/php_network.h"
 #include "ext/standard/base64.h"
 #include "TSRM.h"
 #include "php_globals.h"
@@ -41,6 +42,7 @@
 #include "xdebug_hash.h"
 #include "xdebug_llist.h"
 #include "xdebug_mm.h"
+#include "xdebug_stack.h"
 #include "xdebug_var.h"
 #include "xdebug_xml.h"
 
@@ -263,21 +265,27 @@ static void send_message(xdebug_con *context, xdebug_xml_node *message TSRMLS_DC
 	xdebug_str *tmp;
 
 	tmp = make_message(context, message TSRMLS_CC);
-	SSENDL(context->socket, tmp->d, tmp->l);
+	if (SSENDL(context->socket, tmp->d, tmp->l) != tmp->l) {
+		char *sock_error = php_socket_strerror(php_socket_errno(), NULL, 0);
+		fprintf(stderr, "There was a problem sending %ld bytes on socket %d: %s", tmp->l, context->socket, sock_error);
+		efree(sock_error);
+	}
 	xdebug_str_ptr_dtor(tmp);
 }
 
 static xdebug_xml_node* get_symbol(char* name, xdebug_var_export_options *options TSRMLS_DC)
 {
-	zval                *retval;
+	zval                   retval;
+	xdebug_xml_node       *tmp_node;
 
-	retval = xdebug_get_php_symbol(name TSRMLS_CC);
-#if PHP_VERSION_ID >= 70000
-	if (retval && Z_TYPE_P(retval) != IS_UNDEF) {
-#else
-	if (retval) {
-#endif
-		return xdebug_get_zval_value_xml_node(name, retval, options TSRMLS_CC);
+	xdebug_get_php_symbol(&retval, name TSRMLS_CC);
+	if (Z_TYPE(retval) != IS_UNDEF) {
+		if (strcmp(name, "this") == 0 && Z_TYPE(retval) == IS_NULL) {
+			return NULL;
+		}
+		tmp_node = xdebug_get_zval_value_xml_node(name, &retval, options TSRMLS_CC);
+		zval_ptr_dtor_nogc(&retval);
+		return tmp_node;
 	}
 
 	return NULL;
@@ -285,11 +293,14 @@ static xdebug_xml_node* get_symbol(char* name, xdebug_var_export_options *option
 
 static int get_symbol_contents(char* name, xdebug_xml_node *node, xdebug_var_export_options *options TSRMLS_DC)
 {
-	zval                *retval;
+	zval retval;
 
-	retval = xdebug_get_php_symbol(name TSRMLS_CC);
-	if (retval) {
-		xdebug_var_export_xml_node(&retval, name, node, options, 1 TSRMLS_CC);
+	xdebug_get_php_symbol(&retval, name TSRMLS_CC);
+	if (Z_TYPE(retval) != IS_UNDEF) {
+		// TODO WTF???
+		zval *retval_ptr = &retval;
+		xdebug_var_export_xml_node(&retval_ptr, name, node, options, 1 TSRMLS_CC);
+		zval_ptr_dtor_nogc(&retval);
 		return 1;
 	}
 
@@ -310,7 +321,7 @@ static char* return_file_source(char *filename, int begin, int end TSRMLS_DC)
 
 	filename = xdebug_path_from_url(filename TSRMLS_CC);
 	stream = php_stream_open_wrapper(filename, "rb",
-			USE_PATH | XDEBUG_ENFORCE_SAFE_MODE | REPORT_ERRORS,
+			USE_PATH | REPORT_ERRORS,
 			NULL);
 	xdfree(filename);
 
@@ -457,7 +468,7 @@ static int breakpoint_admin_add(xdebug_con *context, int type, char *key)
 	TSRMLS_FETCH();
 
 	XG(breakpoint_count)++;
-	admin->id   = getpid() * 10000 + XG(breakpoint_count);
+	admin->id   = ((getpid() & 0x1ffff) * 10000) + XG(breakpoint_count);
 	admin->type = type;
 	admin->key  = xdstrdup(key);
 
@@ -491,34 +502,34 @@ static int breakpoint_admin_remove(xdebug_con *context, char *hkey)
 	}
 }
 
-static void breakpoint_brk_info_add(xdebug_xml_node *xml, xdebug_brk_info *brk)
+static void breakpoint_brk_info_add(xdebug_xml_node *xml, xdebug_brk_info *brk_info)
 {
 	TSRMLS_FETCH();
 
-	if (brk->type) {
-		xdebug_xml_add_attribute_ex(xml, "type", xdstrdup(brk->type), 0, 1);
+	if (brk_info->type) {
+		xdebug_xml_add_attribute_ex(xml, "type", xdstrdup(brk_info->type), 0, 1);
 	}
-	if (brk->file) {
-		xdebug_xml_add_attribute_ex(xml, "filename", xdebug_path_to_url(brk->file TSRMLS_CC), 0, 1);
+	if (brk_info->file) {
+		xdebug_xml_add_attribute_ex(xml, "filename", xdebug_path_to_url(brk_info->file TSRMLS_CC), 0, 1);
 	}
-	if (brk->lineno) {
-		xdebug_xml_add_attribute_ex(xml, "lineno", xdebug_sprintf("%lu", brk->lineno), 0, 1);
+	if (brk_info->lineno) {
+		xdebug_xml_add_attribute_ex(xml, "lineno", xdebug_sprintf("%lu", brk_info->lineno), 0, 1);
 	}
-	if (brk->functionname) {
-		xdebug_xml_add_attribute_ex(xml, "function", xdstrdup(brk->functionname), 0, 1);
+	if (brk_info->functionname) {
+		xdebug_xml_add_attribute_ex(xml, "function", xdstrdup(brk_info->functionname), 0, 1);
 	}
-	if (brk->classname) {
-		xdebug_xml_add_attribute_ex(xml, "class", xdstrdup(brk->classname), 0, 1);
+	if (brk_info->classname) {
+		xdebug_xml_add_attribute_ex(xml, "class", xdstrdup(brk_info->classname), 0, 1);
 	}
-	if (brk->temporary) {
+	if (brk_info->temporary) {
 		xdebug_xml_add_attribute(xml, "state", "temporary");
-	} else if (brk->disabled) {
+	} else if (brk_info->disabled) {
 		xdebug_xml_add_attribute(xml, "state", "disabled");
 	} else {
 		xdebug_xml_add_attribute(xml, "state", "enabled");
 	}
-	xdebug_xml_add_attribute_ex(xml, "hit_count", xdebug_sprintf("%lu", brk->hit_count), 0, 1);
-	switch (brk->hit_condition) {
+	xdebug_xml_add_attribute_ex(xml, "hit_count", xdebug_sprintf("%lu", brk_info->hit_count), 0, 1);
+	switch (brk_info->hit_condition) {
 		case XDEBUG_HIT_GREATER_EQUAL:
 			xdebug_xml_add_attribute(xml, "hit_condition", ">=");
 			break;
@@ -529,18 +540,18 @@ static void breakpoint_brk_info_add(xdebug_xml_node *xml, xdebug_brk_info *brk)
 			xdebug_xml_add_attribute(xml, "hit_condition", "%");
 			break;
 	}
-	if (brk->condition) {
+	if (brk_info->condition) {
 		xdebug_xml_node *condition = xdebug_xml_node_init("expression");
-		xdebug_xml_add_text_ex(condition, brk->condition, strlen(brk->condition), 0, 1);
+		xdebug_xml_add_text_ex(condition, brk_info->condition, strlen(brk_info->condition), 0, 1);
 		xdebug_xml_add_child(xml, condition);
 	}
-	xdebug_xml_add_attribute_ex(xml, "hit_value", xdebug_sprintf("%lu", brk->hit_value), 0, 1);
+	xdebug_xml_add_attribute_ex(xml, "hit_value", xdebug_sprintf("%lu", brk_info->hit_value), 0, 1);
 }
 
 static xdebug_brk_info* breakpoint_brk_info_fetch(int type, char *hkey)
 {
 	xdebug_llist_element *le;
-	xdebug_brk_info      *brk = NULL;
+	xdebug_brk_info      *brk_info = NULL;
 	xdebug_arg           *parts = (xdebug_arg*) xdmalloc(sizeof(xdebug_arg));
 
 	TSRMLS_FETCH();
@@ -554,11 +565,11 @@ static xdebug_brk_info* breakpoint_brk_info_fetch(int type, char *hkey)
 			/* Second we loop through the list of file/line breakpoints to
 			 * look for our thingy */
 			for (le = XDEBUG_LLIST_HEAD(XG(context).line_breakpoints); le != NULL; le = XDEBUG_LLIST_NEXT(le)) {
-				brk = XDEBUG_LLIST_VALP(le);
+				brk_info = XDEBUG_LLIST_VALP(le);
 
-				if (atoi(parts->args[1]) == brk->lineno && memcmp(brk->file, parts->args[0], brk->file_len) == 0) {
+				if (atoi(parts->args[1]) == brk_info->lineno && memcmp(brk_info->file, parts->args[0], brk_info->file_len) == 0) {
 					xdebug_arg_dtor(parts);
-					return brk;
+					return brk_info;
 				}
 			}
 
@@ -567,24 +578,24 @@ static xdebug_brk_info* breakpoint_brk_info_fetch(int type, char *hkey)
 			break;
 
 		case BREAKPOINT_TYPE_FUNCTION:
-			if (xdebug_hash_find(XG(context).function_breakpoints, hkey, strlen(hkey), (void *) &brk)) {
-				return brk;
+			if (xdebug_hash_find(XG(context).function_breakpoints, hkey, strlen(hkey), (void *) &brk_info)) {
+				return brk_info;
 			}
 			break;
 
 		case BREAKPOINT_TYPE_EXCEPTION:
-			if (xdebug_hash_find(XG(context).exception_breakpoints, hkey, strlen(hkey), (void *) &brk)) {
-				return brk;
+			if (xdebug_hash_find(XG(context).exception_breakpoints, hkey, strlen(hkey), (void *) &brk_info)) {
+				return brk_info;
 			}
 			break;
 	}
-	return brk;
+	return brk_info;
 }
 
 static int breakpoint_remove(int type, char *hkey)
 {
 	xdebug_llist_element *le;
-	xdebug_brk_info      *brk = NULL;
+	xdebug_brk_info      *brk_info = NULL;
 	xdebug_arg           *parts = (xdebug_arg*) xdmalloc(sizeof(xdebug_arg));
 	int                   retval = FAILURE;
 	TSRMLS_FETCH();
@@ -598,9 +609,9 @@ static int breakpoint_remove(int type, char *hkey)
 			/* Second we loop through the list of file/line breakpoints to
 			 * look for our thingy */
 			for (le = XDEBUG_LLIST_HEAD(XG(context).line_breakpoints); le != NULL; le = XDEBUG_LLIST_NEXT(le)) {
-				brk = XDEBUG_LLIST_VALP(le);
+				brk_info = XDEBUG_LLIST_VALP(le);
 
-				if (atoi(parts->args[1]) == brk->lineno && memcmp(brk->file, parts->args[0], brk->file_len) == 0) {
+				if (atoi(parts->args[1]) == brk_info->lineno && memcmp(brk_info->file, parts->args[0], brk_info->file_len) == 0) {
 					xdebug_llist_remove(XG(context).line_breakpoints, le, NULL);
 					retval = SUCCESS;
 					break;
@@ -734,11 +745,11 @@ static void breakpoint_list_helper(void *xml, xdebug_hash_element *he)
 	xdebug_xml_node  *xml_node = (xdebug_xml_node*) xml;
 	xdebug_xml_node  *child;
 	xdebug_brk_admin *admin = (xdebug_brk_admin*) he->ptr;
-	xdebug_brk_info  *brk;
+	xdebug_brk_info  *brk_info;
 
 	child = xdebug_xml_node_init("breakpoint");
-	brk = breakpoint_brk_info_fetch(admin->type, admin->key);
-	breakpoint_brk_info_add(child, brk);
+	brk_info = breakpoint_brk_info_fetch(admin->type, admin->key);
+	breakpoint_brk_info_add(child, brk_info);
 	xdebug_xml_add_attribute_ex(child, "id", xdebug_sprintf("%lu", admin->id), 0, 1);
 	xdebug_xml_add_child(xml_node, child);
 }
@@ -777,7 +788,7 @@ DBGP_FUNC(breakpoint_set)
 		RETURN_RESULT(XG(status), XG(reason), XDEBUG_ERROR_INVALID_ARGS);
 	} else {
 		if (
-			(strcmp(CMD_OPTION('t'), "line") != 0) && 
+			(strcmp(CMD_OPTION('t'), "line") != 0) &&
 			(strcmp(CMD_OPTION('t'), "conditional") != 0) &&
 			(strcmp(CMD_OPTION('t'), "call") != 0) &&
 			(strcmp(CMD_OPTION('t'), "return") != 0) &&
@@ -832,14 +843,14 @@ DBGP_FUNC(breakpoint_set)
 
 		/* Perhaps we have a break condition */
 		if (CMD_OPTION('-')) {
-			brk_info->condition = (char*) xdebug_base64_decode((unsigned char*) CMD_OPTION('-'), strlen(CMD_OPTION('-')), &new_length); 
+			brk_info->condition = (char*) xdebug_base64_decode((unsigned char*) CMD_OPTION('-'), strlen(CMD_OPTION('-')), &new_length);
 		}
 
 		tmp_name = xdebug_sprintf("%s$%lu", brk_info->file, brk_info->lineno);
 		brk_id = breakpoint_admin_add(context, BREAKPOINT_TYPE_LINE, tmp_name);
 		xdfree(tmp_name);
 		xdebug_llist_insert_next(context->line_breakpoints, XDEBUG_LLIST_TAIL(context->line_breakpoints), (void*) brk_info);
-	} else 
+	} else
 
 	if ((strcmp(CMD_OPTION('t'), "call") == 0) || (strcmp(CMD_OPTION('t'), "return") == 0)) {
 		if (strcmp(CMD_OPTION('t'), "call") == 0) {
@@ -895,29 +906,18 @@ DBGP_FUNC(breakpoint_set)
 static int xdebug_do_eval(char *eval_string, zval *ret_zval TSRMLS_DC)
 {
 	int                old_error_reporting;
+	int                old_track_errors;
 	int                res = FAILURE;
-#if PHP_VERSION_ID >= 70000
-#else
-	zval             **original_return_value_ptr_ptr = EG(return_value_ptr_ptr);
-	zend_op          **original_opline_ptr = EG(opline_ptr);
-	zend_op_array     *original_active_op_array = EG(active_op_array);
-#endif
 	zend_execute_data *original_execute_data = EG(current_execute_data);
 	int                original_no_extensions = EG(no_extensions);
-#if PHP_VERSION_ID >= 70000
 	zend_object       *original_exception = EG(exception);
-#else
-	zval              *original_exception = EG(exception);
-#endif
 	jmp_buf           *original_bailout = EG(bailout);
-#if PHP_VERSION_ID < 70000
-	void             **original_argument_stack_top = EG(argument_stack)->top;
-	void             **original_argument_stack_end = EG(argument_stack)->end;
-#endif
 
-	/* Remember error reporting level */
+	/* Remember error reporting level and track errors */
 	old_error_reporting = EG(error_reporting);
+	old_track_errors = PG(track_errors);
 	EG(error_reporting) = 0;
+	PG(track_errors) = 0;
 
 	/* Do evaluation */
 	XG(breakpoints_allowed) = 0;
@@ -928,31 +928,21 @@ static int xdebug_do_eval(char *eval_string, zval *ret_zval TSRMLS_DC)
 	zend_first_try {
 		res = zend_eval_string(eval_string, ret_zval, "xdebug://debug-eval" TSRMLS_CC);
 	} zend_end_try();
-#if PHP_VERSION_ID >= 70000
+
 	/* FIXME: Bubble up exception message to DBGp return packet */
 	if (EG(exception)) {
 		res = FAILURE;
 	}
-#endif
 
 	/* Clean up */
 	EG(error_reporting) = old_error_reporting;
+	PG(track_errors) = old_track_errors;
 	XG(breakpoints_allowed) = 1;
 
-#if PHP_VERSION_ID >= 70000
-#else
-	EG(return_value_ptr_ptr) = original_return_value_ptr_ptr;
-	EG(opline_ptr) = original_opline_ptr;
-	EG(active_op_array) = original_active_op_array;
-#endif
 	EG(current_execute_data) = original_execute_data;
 	EG(no_extensions) = original_no_extensions;
 	EG(exception) = original_exception;
 	EG(bailout) = original_bailout;
-#if PHP_VERSION_ID < 70000
-	EG(argument_stack)->top = original_argument_stack_top;
-	EG(argument_stack)->end = original_argument_stack_end;
-#endif
 
 	return res;
 }
@@ -971,7 +961,7 @@ DBGP_FUNC(eval)
 	}
 
 	options = (xdebug_var_export_options*) context->options;
-	
+
 	if (CMD_OPTION('p')) {
 		options->runtime[0].page = strtol(CMD_OPTION('p'), NULL, 10);
 	} else {
@@ -991,11 +981,7 @@ DBGP_FUNC(eval)
 	} else {
 		ret_xml = xdebug_get_zval_value_xml_node(NULL, &ret_zval, options TSRMLS_CC);
 		xdebug_xml_add_child(*retval, ret_xml);
-#if PHP_VERSION_ID >= 70000
 		zval_ptr_dtor(&ret_zval);
-#else
-		zval_dtor(&ret_zval);
-#endif
 	}
 }
 
@@ -1067,9 +1053,11 @@ DBGP_FUNC(step_out)
 	XG(context).do_finish = 1;
 
 	if ((fse = xdebug_get_stack_tail(TSRMLS_C))) {
-		XG(context).next_level = fse->level - 1;
+		XG(context).finish_level = fse->level;
+		XG(context).finish_func_nr = fse->function_nr;
 	} else {
-		XG(context).next_level = -1;
+		XG(context).finish_level = -1;
+		XG(context).finish_func_nr = -1;
 	}
 }
 
@@ -1175,7 +1163,7 @@ DBGP_FUNC(feature_get)
 			xdebug_xml_add_text(*retval, xdstrdup("0"));
 			xdebug_xml_add_attribute(*retval, "supported", "1");
 		XDEBUG_STR_CASE_END
-		
+
 		XDEBUG_STR_CASE("language_version")
 			xdebug_xml_add_text(*retval, xdstrdup(PHP_VERSION));
 			xdebug_xml_add_attribute(*retval, "supported", "1");
@@ -1218,6 +1206,16 @@ DBGP_FUNC(feature_get)
 
 		XDEBUG_STR_CASE("show_hidden")
 			xdebug_xml_add_text(*retval, xdebug_sprintf("%ld", options->show_hidden));
+			xdebug_xml_add_attribute(*retval, "supported", "1");
+		XDEBUG_STR_CASE_END
+
+		XDEBUG_STR_CASE("extended_properties")
+			xdebug_xml_add_text(*retval, xdebug_sprintf("%ld", options->extended_properties));
+			xdebug_xml_add_attribute(*retval, "supported", "1");
+		XDEBUG_STR_CASE_END
+
+		XDEBUG_STR_CASE("notify_ok")
+			xdebug_xml_add_text(*retval, xdebug_sprintf("%ld", XG(context).send_notifications));
 			xdebug_xml_add_attribute(*retval, "supported", "1");
 		XDEBUG_STR_CASE_END
 
@@ -1274,6 +1272,14 @@ DBGP_FUNC(feature_set)
 
 		XDEBUG_STR_CASE("multiple_sessions")
 			/* FIXME: Add new boolean option check / struct field for this */
+		XDEBUG_STR_CASE_END
+
+		XDEBUG_STR_CASE("extended_properties")
+			options->extended_properties = strtol(CMD_OPTION('v'), NULL, 10);
+		XDEBUG_STR_CASE_END
+
+		XDEBUG_STR_CASE("notify_ok")
+			XG(context).send_notifications = strtol(CMD_OPTION('v'), NULL, 10);
 		XDEBUG_STR_CASE_END
 
 		XDEBUG_STR_CASE_DEFAULT
@@ -1385,6 +1391,7 @@ DBGP_FUNC(property_get)
 	if (CMD_OPTION('m')) {
 		options->max_data= strtol(CMD_OPTION('m'), NULL, 10);
 	}
+
 	if (context_nr == 2) { /* constants */
 		zval const_val;
 
@@ -1397,7 +1404,13 @@ DBGP_FUNC(property_get)
 			RETURN_RESULT(XG(status), XG(reason), XDEBUG_ERROR_PROPERTY_NON_EXISTENT);
 		}
 	} else {
-		if (add_variable_node(*retval, CMD_OPTION('n'), 1, 0, 0, options TSRMLS_CC) == FAILURE) {
+		int add_var_retval;
+
+		XG(context).inhibit_notifications = 1;
+		add_var_retval = add_variable_node(*retval, CMD_OPTION('n'), 1, 0, 0, options TSRMLS_CC);
+		XG(context).inhibit_notifications = 0;
+
+		if (add_var_retval) {
 			options->max_data = old_max_data;
 			RETURN_RESULT(XG(status), XG(reason), XDEBUG_ERROR_PROPERTY_NON_EXISTENT);
 		}
@@ -1407,15 +1420,6 @@ DBGP_FUNC(property_get)
 
 static void set_vars_from_EG(TSRMLS_D)
 {
-#if PHP_VERSION_ID >= 70000
-#else
-	EG(opline_ptr) = &EG(current_execute_data)->opline;
-	EG(active_op_array) = EG(current_execute_data)->op_array;
-	EG(active_symbol_table) = EG(current_execute_data)->symbol_table;
-	EG(This) = EG(current_execute_data)->current_this;
-	EG(scope) = EG(current_execute_data)->current_scope;
-	EG(called_scope) = EG(current_execute_data)->current_called_scope;
-#endif
 }
 
 DBGP_FUNC(property_set)
@@ -1430,7 +1434,6 @@ DBGP_FUNC(property_set)
 	zval                       ret_zval;
 	function_stack_entry      *fse;
 	xdebug_var_export_options *options = (xdebug_var_export_options*) context->options;
-	zval                      *symbol;
 	zend_execute_data         *original_execute_data;
 	XDEBUG_STR_SWITCH_DECL;
 
@@ -1479,32 +1482,30 @@ DBGP_FUNC(property_set)
 	new_value = xdebug_base64_decode((unsigned char*) data, strlen(data), &new_length);
 
 	if (CMD_OPTION('t')) {
-		symbol = xdebug_get_php_symbol(CMD_OPTION('n') TSRMLS_CC);
+		zval symbol;
+		xdebug_get_php_symbol(&symbol, CMD_OPTION('n') TSRMLS_CC);
 
 		/* Handle result */
-		if (!symbol) {
+		if (Z_TYPE(symbol) == IS_UNDEF) {
 			efree(new_value);
 			RETURN_RESULT(XG(status), XG(reason), XDEBUG_ERROR_PROPERTY_NON_EXISTENT);
 		} else {
-			zval_dtor(symbol);
-#if PHP_VERSION_ID >= 70000
-			ZVAL_STRINGL(symbol, (char*) new_value, new_length);
-#else
-			ZVAL_STRINGL(symbol, (char*) new_value, new_length, 0);
-#endif
+			// TODO Doesn't make sense anymore in this form
+			zval_ptr_dtor_nogc(&symbol);
+			ZVAL_STRINGL(&symbol, (char*) new_value, new_length);
 			xdebug_xml_add_attribute(*retval, "success", "1");
 
 			XDEBUG_STR_SWITCH(CMD_OPTION('t')) {
 				XDEBUG_STR_CASE("bool")
-					convert_to_boolean(symbol);
+					convert_to_boolean(&symbol);
 				XDEBUG_STR_CASE_END
 
 				XDEBUG_STR_CASE("int")
-					convert_to_long(symbol);
+					convert_to_long(&symbol);
 				XDEBUG_STR_CASE_END
 
 				XDEBUG_STR_CASE("float")
-					convert_to_double(symbol);
+					convert_to_double(&symbol);
 				XDEBUG_STR_CASE_END
 
 				XDEBUG_STR_CASE("string")
@@ -1634,9 +1635,12 @@ static void attach_used_var_with_contents(void *xml, xdebug_hash_element* he, vo
 	if (contents) {
 		xdebug_xml_add_child(node, contents);
 	} else {
-		xdebug_attach_uninitialized_var(node, name);
+		xdebug_attach_uninitialized_var(options, node, name);
 	}
 }
+
+# define HASH_KEY_VAL(k) (k)->key->val
+# define HASH_KEY_LEN(k) (k)->key->len
 
 static int xdebug_add_filtered_symboltable_var(zval *symbol TSRMLS_DC, int num_args, va_list args, zend_hash_key *hash_key)
 {
@@ -1646,9 +1650,8 @@ static int xdebug_add_filtered_symboltable_var(zval *symbol TSRMLS_DC, int num_a
 
 	/* We really ought to deal properly with non-associate keys for symbol
 	 * tables, but for now, we'll just ignore them. */
-#if PHP_VERSION_ID >= 70000
 	if (!hash_key->key) { return 0; }
-#endif
+
 	if (!HASH_KEY_VAL(hash_key) || HASH_KEY_LEN(hash_key) == 0) { return 0; }
 
 	if (strcmp("argc", HASH_KEY_VAL(hash_key)) == 0) { return 0; }
@@ -1683,14 +1686,6 @@ static int xdebug_add_filtered_symboltable_var(zval *symbol TSRMLS_DC, int num_a
 #undef HASH_KEY_VAL
 #undef HASH_KEY_LEN
 
-#if PHP_VERSION_ID >= 70000
-# define CONSTANT_NAME_VAL(k) (k)->val
-# define CONSTANT_NAME_LEN(k) (k)->len
-#else
-# define CONSTANT_NAME_VAL(k) (k)
-# define CONSTANT_NAME_LEN(k) k ## _len
-#endif
-
 static int attach_context_vars(xdebug_xml_node *node, xdebug_var_export_options *options, long context_id, long depth, void (*func)(void *, xdebug_hash_element*, void*) TSRMLS_DC)
 {
 	function_stack_entry *fse;
@@ -1717,7 +1712,6 @@ static int attach_context_vars(xdebug_xml_node *node, xdebug_var_export_options 
 
 	/* add user defined constants */
 	if (context_id == 2) {
-#if PHP_VERSION_ID >= 70000
 		zend_constant *val;
 
 		ZEND_HASH_FOREACH_PTR(EG(zend_constants), val) {
@@ -1731,29 +1725,8 @@ static int attach_context_vars(xdebug_xml_node *node, xdebug_var_export_options 
 				continue;
 			}
 
-			add_constant_node(node, CONSTANT_NAME_VAL(val->name), &(val->value), options TSRMLS_CC);
+			add_constant_node(node, val->name->val, &(val->value), options TSRMLS_CC);
 		} ZEND_HASH_FOREACH_END();
-#else
-		HashPosition   pos;
-		zend_constant *val;
-
-		zend_hash_internal_pointer_reset_ex(EG(zend_constants), &pos);
-		while (zend_hash_get_current_data_ex(EG(zend_constants), (void **) &val, &pos) != FAILURE) {
-			if (!val->name) {
-				/* skip special constants */
-				goto next_constant;
-			}
-
-			if (val->module_number != PHP_USER_CONSTANT) {
-				/* we're only interested in user defined constants */
-				goto next_constant;
-			}
-
-			add_constant_node(node, CONSTANT_NAME_VAL(val->name), &(val->value), options TSRMLS_CC);
-next_constant:
-			zend_hash_move_forward_ex(EG(zend_constants), &pos);
-		}
-#endif
 
 		return 0;
 	}
@@ -1798,7 +1771,7 @@ next_constant:
 		 * method call as we attach constants and static properties to "this"
 		 * too normally. */
 		if (fse->function.type == XFUNC_STATIC_MEMBER) {
-			zend_class_entry *ce = xdebug_fetch_class(fse->function.class, strlen(fse->function.class), ZEND_FETCH_CLASS_SELF TSRMLS_CC);
+			zend_class_entry *ce = xdebug_fetch_class(fse->function.class, strlen(fse->function.class), ZEND_FETCH_CLASS_DEFAULT TSRMLS_CC);
 
 			xdebug_attach_static_vars(node, options, ce TSRMLS_CC);
 		}
@@ -1808,13 +1781,9 @@ next_constant:
 		XG(This)                = NULL;
 		return 0;
 	}
-	
+
 	return 1;
 }
-
-#undef CONSTANT_NAME_VAL
-#undef CONSTANT_NAME_LEN
-
 
 DBGP_FUNC(stack_depth)
 {
@@ -1879,7 +1848,7 @@ DBGP_FUNC(context_get)
 	int                        context_id = 0;
 	int                        depth = 0;
 	xdebug_var_export_options *options = (xdebug_var_export_options*) context->options;
-	
+
 	if (CMD_OPTION('c')) {
 		context_id = atol(CMD_OPTION('c'));
 	}
@@ -1888,7 +1857,7 @@ DBGP_FUNC(context_get)
 	}
 	/* Always reset to page = 0, as it might have been modified by property_get or property_value */
 	options->runtime[0].page = 0;
-	
+
 	res = attach_context_vars(*retval, options, context_id, depth, attach_used_var_with_contents TSRMLS_CC);
 	switch (res) {
 		case 1:
@@ -2030,15 +1999,15 @@ static int xdebug_dbgp_parse_cmd(char *line, char **cmd, xdebug_dbgp_arg **ret_a
 				break;
 			case STATE_VALUE_FOLLOWS:
 				if ((*ptr == ' ' && opt != '-') || *ptr == '\0') {
-					int index = opt - 'a';
+					int opt_index = opt - 'a';
 
 					if (opt == '-') {
-						index = 26;
+						opt_index = 26;
 					}
 
-					if (!args->value[index]) {
-						args->value[index] = xdcalloc(1, ptr - value_begin + 1);
-						memcpy(args->value[index], value_begin, ptr - value_begin);
+					if (!args->value[opt_index]) {
+						args->value[opt_index] = xdcalloc(1, ptr - value_begin + 1);
+						memcpy(args->value[opt_index], value_begin, ptr - value_begin);
 						state = STATE_NORMAL;
 					} else {
 						goto duplicate_opts;
@@ -2054,21 +2023,22 @@ static int xdebug_dbgp_parse_cmd(char *line, char **cmd, xdebug_dbgp_arg **ret_a
 					charescaped = !charescaped;
 				} else
 				if (*ptr == '"') {
-					int index = opt - 'a';
+					int opt_index = opt - 'a';
 
 					if (charescaped) {
 						charescaped = 0;
 						break;
 					}
 					if (opt == '-') {
-						index = 26;
+						opt_index = 26;
 					}
 
-					if (!args->value[index]) {
+					if (!args->value[opt_index]) {
 						int len = ptr - value_begin;
-						args->value[index] = xdcalloc(1, len + 1);
-						memcpy(args->value[index], value_begin, len);
-						xdebug_stripcslashes(args->value[index], &len);
+						args->value[opt_index] = xdcalloc(1, len + 1);
+						memcpy(args->value[opt_index], value_begin, len);
+						xdebug_stripcslashes(args->value[opt_index], &len);
+
 						state = STATE_SKIP_CHAR;
 					} else {
 						goto duplicate_opts;
@@ -2078,7 +2048,7 @@ static int xdebug_dbgp_parse_cmd(char *line, char **cmd, xdebug_dbgp_arg **ret_a
 			case STATE_SKIP_CHAR:
 				state = STATE_NORMAL;
 				break;
-				
+
 		}
 	} while (*ptr);
 	*ret_args = args;
@@ -2184,7 +2154,7 @@ static int xdebug_dbgp_cmdloop(xdebug_con *context, int bail TSRMLS_DC)
 	char *option;
 	int   ret;
 	xdebug_xml_node *response;
-	
+
 	do {
 		option = xdebug_fd_read_line_delim(context->socket, context->buffer, FD_RL_SOCKET, '\0', NULL);
 		if (!option) {
@@ -2202,7 +2172,7 @@ static int xdebug_dbgp_cmdloop(xdebug_con *context, int bail TSRMLS_DC)
 
 		free(option);
 	} while (0 == ret);
-	
+
 	if (bail && XG(status) == DBGP_STATUS_STOPPED) {
 		zend_bailout();
 	}
@@ -2282,6 +2252,8 @@ int xdebug_dbgp_init(xdebug_con *context, int mode)
 	options->max_data     = 1024;
 	options->max_depth    = 1;
 	options->show_hidden  = 0;
+	options->extended_properties = 0;
+	options->force_extended      = 0;
 	options->runtime = (xdebug_var_runtime_page*) xdmalloc((options->max_depth + 1) * sizeof(xdebug_var_runtime_page));
 	for (i = 0; i < options->max_depth; i++) {
 		options->runtime[i].page = 0;
@@ -2294,6 +2266,8 @@ int xdebug_dbgp_init(xdebug_con *context, int mode)
 	context->line_breakpoints = xdebug_llist_alloc((xdebug_llist_dtor) xdebug_llist_brk_dtor);
 	context->eval_id_lookup = xdebug_hash_alloc(64, (xdebug_hash_dtor) xdebug_hash_eval_info_dtor);
 	context->eval_id_sequence = 0;
+	context->send_notifications = 0;
+	context->inhibit_notifications = 0;
 
 	xdebug_dbgp_cmdloop(context, 1 TSRMLS_CC);
 
@@ -2320,10 +2294,10 @@ int xdebug_dbgp_deinit(xdebug_con *context)
 		}
 		xdebug_xml_add_attribute_ex(response, "status", xdebug_dbgp_status_strings[XG(status)], 0, 0);
 		xdebug_xml_add_attribute_ex(response, "reason", xdebug_dbgp_reason_strings[XG(reason)], 0, 0);
-	
+
 		send_message(context, response TSRMLS_CC);
 		xdebug_xml_node_dtor(response);
-	
+
 		xdebug_dbgp_cmdloop(context, 0 TSRMLS_CC);
 	}
 
@@ -2377,7 +2351,7 @@ int xdebug_dbgp_error(xdebug_con *context, int type, char *exception_type, char 
 	}
 /*
 	runtime_allowed = (
-		(type != E_ERROR) && 
+		(type != E_ERROR) &&
 		(type != E_CORE_ERROR) &&
 		(type != E_COMPILE_ERROR) &&
 		(type != E_USER_ERROR)
@@ -2481,6 +2455,49 @@ int xdebug_dbgp_stream_output(const char *string, unsigned int length TSRMLS_DC)
 		return 0;
 	}
 	return -1;
+}
+
+int xdebug_dbgp_notification(xdebug_con *context, const char *file, long lineno, int type, char *type_string, char *message)
+{
+	xdebug_xml_node *response, *error_container;
+	TSRMLS_FETCH();
+
+	response = xdebug_xml_node_init("notify");
+	xdebug_xml_add_attribute(response, "xmlns", "urn:debugger_protocol_v1");
+	xdebug_xml_add_attribute(response, "xmlns:xdebug", "http://xdebug.org/dbgp/xdebug");
+	xdebug_xml_add_attribute(response, "name", "error");
+
+	error_container = xdebug_xml_node_init("xdebug:message");
+	if (file) {
+		char *tmp_filename = (char*) file;
+		int tmp_lineno = lineno;
+		if (check_evaled_code(NULL, &tmp_filename, &tmp_lineno, 0 TSRMLS_CC)) {
+			xdebug_xml_add_attribute_ex(error_container, "filename", xdstrdup(tmp_filename), 1, 1);
+		} else {
+			xdebug_xml_add_attribute_ex(error_container, "filename", xdebug_path_to_url(file TSRMLS_CC), 0, 1);
+		}
+	}
+	if (lineno) {
+		xdebug_xml_add_attribute_ex(error_container, "lineno", xdebug_sprintf("%lu", lineno), 0, 1);
+	}
+	if (type_string) {
+		xdebug_xml_add_attribute_ex(error_container, "type_string", xdstrdup(type_string), 0, 1);
+	}
+	if (message) {
+		char *tmp_buf;
+
+		if (type == E_ERROR && ((tmp_buf = xdebug_strip_php_stack_trace(message)) != NULL)) {
+			xdebug_xml_add_text(error_container, tmp_buf);
+		} else {
+			xdebug_xml_add_text(error_container, xdstrdup(message));
+		}
+	}
+	xdebug_xml_add_child(response, error_container);
+
+	send_message(context, response TSRMLS_CC);
+	xdebug_xml_node_dtor(response);
+
+	return 1;
 }
 
 static char *create_eval_key_file(char *filename, int lineno)

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | Xdebug                                                               |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2002-2016 Derick Rethans                               |
+   | Copyright (c) 2002-2017 Derick Rethans                               |
    +----------------------------------------------------------------------+
    | This source file is subject to version 1.0 of the Xdebug license,    |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -21,13 +21,13 @@
 
 extern ZEND_DECLARE_MODULE_GLOBALS(xdebug);
 
-void *xdebug_trace_computerized_init(char *fname, long options TSRMLS_DC)
+void *xdebug_trace_computerized_init(char *fname, char *script_filename, long options TSRMLS_DC)
 {
 	xdebug_trace_computerized_context *tmp_computerized_context;
 	char *used_fname;
 
 	tmp_computerized_context = xdmalloc(sizeof(xdebug_trace_computerized_context));
-	tmp_computerized_context->trace_file = xdebug_trace_open_file(fname, options, (char**) &used_fname TSRMLS_CC);
+	tmp_computerized_context->trace_file = xdebug_trace_open_file(fname, script_filename, options, (char**) &used_fname TSRMLS_CC);
 	tmp_computerized_context->trace_filename = used_fname;
 
 	return tmp_computerized_context->trace_file ? tmp_computerized_context : NULL;
@@ -132,21 +132,12 @@ void xdebug_trace_computerized_function_entry(void *ctxt, function_stack_entry *
 
 	if (fse->include_filename) {
 		if (fse->function.type == XFUNC_EVAL) {
-#if PHP_VERSION_ID >= 70000
 			zend_string *i_filename = zend_string_init(fse->include_filename, strlen(fse->include_filename), 0);
 			zend_string *escaped;
 			escaped = php_addcslashes(i_filename, 0, "'\\\0..\37", 6);
 			xdebug_str_add(&str, xdebug_sprintf("'%s'", escaped->val), 1);
 			zend_string_release(escaped);
 			zend_string_release(i_filename);
-#else
-			int tmp_len;
-
-			char *escaped;
-			escaped = php_addcslashes(fse->include_filename, strlen(fse->include_filename), &tmp_len, 0, "'\\\0..\37", 6 TSRMLS_CC);
-			xdebug_str_add(&str, xdebug_sprintf("'%s'", escaped), 1);
-			efree(escaped);
-#endif
 		} else {
 			xdebug_str_add(&str, fse->include_filename, 0);
 		}
@@ -188,7 +179,7 @@ void xdebug_trace_computerized_function_entry(void *ctxt, function_stack_entry *
 
 	/* Trailing \n */
 	xdebug_str_add(&str, "\n", 0);
-	
+
 	fprintf(context->trace_file, "%s", str.d);
 	fflush(context->trace_file);
 	xdfree(str.d);
@@ -245,8 +236,6 @@ xdebug_trace_handler_t xdebug_trace_handler_computerized =
 	xdebug_trace_computerized_function_entry,
 	xdebug_trace_computerized_function_exit,
 	xdebug_trace_computerized_function_return_value,
-#if PHP_VERSION_ID >= 50500
 	NULL /* xdebug_trace_computerized_generator_return_value */,
-#endif
 	NULL /* xdebug_trace_computerized_assignment */
 };

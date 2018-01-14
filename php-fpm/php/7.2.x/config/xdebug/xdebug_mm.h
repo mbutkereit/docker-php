@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | Xdebug                                                               |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2002-2016 Derick Rethans                               |
+   | Copyright (c) 2002-2017 Derick Rethans                               |
    +----------------------------------------------------------------------+
    | This source file is subject to version 1.0 of the Xdebug license,    |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -22,14 +22,14 @@
 /* Memory allocators */
 #if 0
 #define xdmalloc    emalloc
-#define xdcalloc    ecalloc	
+#define xdcalloc    ecalloc
 #define xdrealloc   erealloc
 #define xdfree      efree
 #define xdstrdup    estrdup
 #define xdstrndup   estrndup
-#else  
+#else
 #define xdmalloc    malloc
-#define xdcalloc    calloc	
+#define xdcalloc    calloc
 #define xdrealloc   realloc
 #define xdfree      free
 #define xdstrdup    strdup

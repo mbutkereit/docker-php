@@ -12,11 +12,11 @@
  *
  * The Original Code is vl-srm.net code.
  *
- * The Initial Developer of the Original Code is the Vulcan Logic 
- * Group.  Portions created by Vulcan Logic Group are Copyright (C) 
+ * The Initial Developer of the Original Code is the Vulcan Logic
+ * Group.  Portions created by Vulcan Logic Group are Copyright (C)
  * 2000, 2001, 2002 Vulcan Logic Group. All Rights Reserved.
  *
- * Author(s): Sterling Hughes <sterling@php.net> 
+ * Author(s): Sterling Hughes <sterling@php.net>
  */
 
 #include <stdlib.h>
@@ -170,7 +170,7 @@ size_t xdebug_llist_count(xdebug_llist *l)
 
 void xdebug_llist_empty(xdebug_llist *l, void *user)
 {
-	while (xdebug_llist_count(l) > 0) {
+	while (xdebug_llist_count(l) > 0 && XDEBUG_LLIST_TAIL(l)) {
 		xdebug_llist_remove(l, XDEBUG_LLIST_TAIL(l), user);
 	}
 }

@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | Xdebug                                                               |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2002-2016 Derick Rethans                               |
+   | Copyright (c) 2002-2017 Derick Rethans                               |
    +----------------------------------------------------------------------+
    | This source file is subject to version 1.0 of the Xdebug license,    |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -45,6 +45,10 @@ function_stack_entry *xdebug_get_stack_frame(int nr TSRMLS_DC)
 	}
 
 	if (!(le = XDEBUG_LLIST_TAIL(XG(stack)))) {
+		return NULL;
+	}
+
+	if (nr < 0) {
 		return NULL;
 	}
 

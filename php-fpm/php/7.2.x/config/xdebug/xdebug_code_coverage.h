@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | Xdebug                                                               |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2002-2016 Derick Rethans                               |
+   | Copyright (c) 2002-2017 Derick Rethans                               |
    +----------------------------------------------------------------------+
    | This source file is subject to version 1.0 of the Xdebug license,    |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -55,27 +55,29 @@ void xdebug_coverage_line_dtor(void *data);
 xdebug_coverage_file *xdebug_coverage_file_ctor(char *filename);
 void xdebug_coverage_file_dtor(void *data);
 
+char* xdebug_func_format(xdebug_func *func TSRMLS_DC);
+void xdebug_build_fname_from_oparray(xdebug_func *tmp, zend_op_array *opa TSRMLS_DC);
+
 xdebug_coverage_function *xdebug_coverage_function_ctor(char *function_name);
 void xdebug_coverage_function_dtor(void *data);
 void xdebug_print_opcode_info(char type, zend_execute_data *execute_data, const zend_op *cur_opcode TSRMLS_DC);
-void xdebug_code_coverage_start_of_function(zend_op_array *op_array TSRMLS_DC);
-void xdebug_code_coverage_end_of_function(zend_op_array *op_array TSRMLS_DC);
+void xdebug_code_coverage_start_of_function(zend_op_array *op_array, char *function_name TSRMLS_DC);
+void xdebug_code_coverage_end_of_function(zend_op_array *op_array, char *file_name, char *function_name TSRMLS_DC);
 
-int xdebug_check_branch_entry_handler(ZEND_USER_OPCODE_HANDLER_ARGS);
-int xdebug_common_override_handler(ZEND_USER_OPCODE_HANDLER_ARGS);
+int xdebug_check_branch_entry_handler(zend_execute_data *execute_data);
+int xdebug_common_override_handler(zend_execute_data *execute_data);
 
 #define XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(f) \
-	int xdebug_##f##_handler(ZEND_USER_OPCODE_HANDLER_ARGS)
+	int xdebug_##f##_handler(zend_execute_data *execute_data)
 
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign);
+XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(qm_assign);
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_add);
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_sub);
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_mul);
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_div);
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_mod);
-#if PHP_VERSION_ID >= 50600
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_pow);
-#endif
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_sl);
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_sr);
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(pre_inc);
@@ -92,6 +94,7 @@ XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_bw_and);
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_bw_xor);
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_dim);
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_obj);
+XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_ref);
 
 void xdebug_count_line(char *file, int lineno, int executable, int deadcode TSRMLS_DC);
 void xdebug_prefill_code_coverage(zend_op_array *op_array TSRMLS_DC);
