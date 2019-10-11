@@ -3,17 +3,17 @@
    +----------------------------------------------------------------------+
    | Xdebug                                                               |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2002-2017 Derick Rethans                               |
+   | Copyright (c) 2002-2018 Derick Rethans                               |
    +----------------------------------------------------------------------+
    | This source file is subject to version 1.01 of the Xdebug license,   |
    | that is bundled with this package in the file LICENSE, and is        |
    | available at through the world-wide-web at                           |
-   | http://xdebug.derickrethans.nl/license.php                           |
+   | https://xdebug.org/license.php                                       |
    | If you did not receive a copy of the Xdebug license and are unable   |
    | to obtain it through the world-wide-web, please send a note to       |
-   | xdebug@derickrethans.nl so we can mail you a copy immediately.       |
+   | derick@xdebug.org so we can mail you a copy immediately.             |
    +----------------------------------------------------------------------+
-   | Authors:  Derick Rethans <derick@xdebug.org>                         |
+   | Authors: Derick Rethans <derick@xdebug.org>                          |
    +----------------------------------------------------------------------+
  */
 if ( $argc <= 1 || $argc > 4 )
@@ -50,6 +50,7 @@ foreach( $functions as $name => $f )
 		$maxLen = strlen( $name );
 	}
 }
+$maxLen = max( $maxLen, 8 );
 
 echo "Showing the {$elements} most costly calls sorted by '{$sortKey}'.\n\n";
 
@@ -132,6 +133,7 @@ class drXdebugTraceFileParser
 		{
 			$buffer = fgets( $this->handle, 4096 );
 			$read += strlen( $buffer );
+			$buffer = rtrim( $buffer, PHP_EOL );
 			$this->parseLine( $buffer );
 			$c++;
 
@@ -184,6 +186,10 @@ class drXdebugTraceFileParser
 				$dTime   = $time   - $prevTime;
 				$dMemory = $memory - $prevMem;
 
+				if ( ! array_key_exists( $depth - 1, $this->stack ) )
+				{
+					$this->stack[$depth - 1] = array( '', 0, 0, 0, 0 );
+				}
 				$this->stack[$depth - 1][3] += $dTime;
 				$this->stack[$depth - 1][4] += $dMemory;
 

@@ -2,15 +2,15 @@
    +----------------------------------------------------------------------+
    | Xdebug                                                               |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2002-2017 Derick Rethans                               |
+   | Copyright (c) 2002-2018 Derick Rethans                               |
    +----------------------------------------------------------------------+
-   | This source file is subject to version 1.0 of the Xdebug license,    |
+   | This source file is subject to version 1.01 of the Xdebug license,   |
    | that is bundled with this package in the file LICENSE, and is        |
    | available at through the world-wide-web at                           |
-   | http://xdebug.derickrethans.nl/license.php                           |
+   | https://xdebug.org/license.php                                       |
    | If you did not receive a copy of the Xdebug license and are unable   |
    | to obtain it through the world-wide-web, please send a note to       |
-   | xdebug@derickrethans.nl so we can mail you a copy immediately.       |
+   | derick@xdebug.org so we can mail you a copy immediately.             |
    +----------------------------------------------------------------------+
    | Authors: Derick Rethans <derick@xdebug.org>                          |
    +----------------------------------------------------------------------+
@@ -82,7 +82,7 @@ int xdebug_filter_match_namespace_whitelist(function_stack_entry *fse, long *fil
 		*filtered_flag = 0;
 		return 1;
 	}
-	if (fse->function.class && strcasecmp(filter, fse->function.class) == 0) {
+	if (fse->function.class && strlen(filter) > 0 && strncasecmp(filter, fse->function.class, strlen(filter)) == 0) {
 		*filtered_flag = 0;
 		return 1;
 	}
@@ -95,7 +95,7 @@ int xdebug_filter_match_namespace_blacklist(function_stack_entry *fse, long *fil
 		*filtered_flag = 1;
 		return 1;
 	}
-	if (fse->function.class && strcasecmp(filter, fse->function.class) == 0) {
+	if (fse->function.class && strlen(filter) > 0 && strncasecmp(filter, fse->function.class, strlen(filter)) == 0) {
 		*filtered_flag = 1;
 		return 1;
 	}
@@ -142,6 +142,10 @@ static void xdebug_filter_run_internal(function_stack_entry *fse, int group, lon
 			*filtered_flag = 0;
 			filter_to_run = xdebug_filter_match_namespace_blacklist;
 			break;
+
+		default:
+			/* Logically can't happen, but compilers can't detect that */
+			return;
 	}
 
 	for (k = 0; k < filters->size; k++, le = XDEBUG_LLIST_NEXT(le)) {

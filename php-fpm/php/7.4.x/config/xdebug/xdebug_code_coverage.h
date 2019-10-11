@@ -2,15 +2,15 @@
    +----------------------------------------------------------------------+
    | Xdebug                                                               |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2002-2017 Derick Rethans                               |
+   | Copyright (c) 2002-2018 Derick Rethans                               |
    +----------------------------------------------------------------------+
-   | This source file is subject to version 1.0 of the Xdebug license,    |
+   | This source file is subject to version 1.01 of the Xdebug license,   |
    | that is bundled with this package in the file LICENSE, and is        |
    | available at through the world-wide-web at                           |
-   | http://xdebug.derickrethans.nl/license.php                           |
+   | https://xdebug.org/license.php                                       |
    | If you did not receive a copy of the Xdebug license and are unable   |
    | to obtain it through the world-wide-web, please send a note to       |
-   | xdebug@derickrethans.nl so we can mail you a copy immediately.       |
+   | derick@xdebug.org so we can mail you a copy immediately.             |
    +----------------------------------------------------------------------+
    | Authors: Derick Rethans <derick@xdebug.org>                          |
    +----------------------------------------------------------------------+
@@ -72,14 +72,24 @@ int xdebug_common_override_handler(zend_execute_data *execute_data);
 
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign);
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(qm_assign);
+#if PHP_VERSION_ID >= 70400
+XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_op);
+XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_dim_op);
+XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_obj_op);
+XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_static_prop_op);
+#else
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_add);
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_sub);
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_mul);
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_div);
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_mod);
-XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_pow);
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_sl);
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_sr);
+XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_bw_or);
+XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_bw_and);
+XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_bw_xor);
+XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_pow);
+#endif
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(pre_inc);
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(post_inc);
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(pre_dec);
@@ -89,12 +99,18 @@ XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(post_inc_obj);
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(pre_dec_obj);
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(post_dec_obj);
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_concat);
-XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_bw_or);
-XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_bw_and);
-XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_bw_xor);
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_dim);
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_obj);
 XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_ref);
+#if PHP_VERSION_ID >= 70400
+XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_obj_ref);
+XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_static_prop);
+XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(assign_static_prop_ref);
+XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(pre_inc_static_prop);
+XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(pre_dec_static_prop);
+XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(post_inc_static_prop);
+XDEBUG_OPCODE_OVERRIDE_ASSIGN_DECL(post_dec_static_prop);
+#endif
 
 void xdebug_count_line(char *file, int lineno, int executable, int deadcode TSRMLS_DC);
 void xdebug_prefill_code_coverage(zend_op_array *op_array TSRMLS_DC);

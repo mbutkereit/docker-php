@@ -12,26 +12,26 @@
    | to obtain it through the world-wide-web, please send a note to       |
    | derick@xdebug.org so we can mail you a copy immediately.             |
    +----------------------------------------------------------------------+
-   | Authors: Derick Rethans <derick@xdebug.org>                          |
+   | Authors: Benjamin Eberlei <kontakt@beberlei.de>					  |
    +----------------------------------------------------------------------+
  */
 
-#ifndef __HAVE_XDEBUG_SUPERGLOBALS_H__
-#define __HAVE_XDEBUG_SUPERGLOBALS_H__
+#ifndef __XDEBUG_GC_STATS_H__
+#define __XDEBUG_GC_STATS_H__
 
-#include "php.h"
+typedef struct _xdebug_gc_run {
+	zend_long    collected;
+	zend_long    duration;
+	zend_long    memory_before;
+	zend_long    memory_after;
+	char        *function_name;
+	char        *class_name;
+} xdebug_gc_run;
 
-void xdebug_superglobals_dump_dtor(void *, void*);
-char *xdebug_get_printable_superglobals(int html TSRMLS_DC);
-void xdebug_superglobals_dump_tok(xdebug_llist *l, char *str);
+extern int (*xdebug_old_gc_collect_cycles)(void);
 
-# define DUMP_TOK(__llist) \
-	xdebug_llist_empty(&XG(__llist), NULL); \
-	if (new_value && new_value->val) { \
-		char *str = estrndup(new_value->val, new_value->len); \
-		xdebug_superglobals_dump_tok(&XG(__llist), str); \
-		efree(str); \
-	} \
-	return SUCCESS;
+int xdebug_gc_stats_init(char *fname, char *script_name);
+void xdebug_gc_stats_stop();
+int xdebug_gc_collect_cycles(void);
 
-#endif /* __HAVE_XDEBUG_SUPERGLOBALS_H__ */
+#endif

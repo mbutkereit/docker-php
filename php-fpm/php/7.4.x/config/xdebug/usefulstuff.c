@@ -2,17 +2,17 @@
    +----------------------------------------------------------------------+
    | Xdebug                                                               |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2002-2017 Derick Rethans                               |
+   | Copyright (c) 2002-2018 Derick Rethans                               |
    +----------------------------------------------------------------------+
-   | This source file is subject to version 1.0 of the Xdebug license,    |
+   | This source file is subject to version 1.01 of the Xdebug license,   |
    | that is bundled with this package in the file LICENSE, and is        |
    | available at through the world-wide-web at                           |
-   | http://xdebug.derickrethans.nl/license.php                           |
+   | https://xdebug.org/license.php                                       |
    | If you did not receive a copy of the Xdebug license and are unable   |
    | to obtain it through the world-wide-web, please send a note to       |
-   | xdebug@derickrethans.nl so we can mail you a copy immediately.       |
+   | derick@xdebug.org so we can mail you a copy immediately.             |
    +----------------------------------------------------------------------+
-   | Authors:  Derick Rethans <derick@xdebug.org>                         |
+   | Authors: Derick Rethans <derick@xdebug.org>                          |
    +----------------------------------------------------------------------+
  */
 
@@ -78,7 +78,12 @@ char* xdebug_fd_read_line_delim(int socketfd, fd_buf *context, int type, unsigne
 			memcpy(context->buffer + context->buffer_size, buffer, newl);
 			context->buffer_size += newl;
 			context->buffer[context->buffer_size] = '\0';
+		} else if (newl == -1 && errno == EINTR) {
+			continue;
 		} else {
+			free(context->buffer);
+			context->buffer = NULL;
+			context->buffer_size = 0;
 			return NULL;
 		}
 	}
@@ -106,12 +111,11 @@ char* xdebug_fd_read_line_delim(int socketfd, fd_buf *context, int type, unsigne
 	return tmp;
 }
 
-char *xdebug_join(char *delim, xdebug_arg *args, int begin, int end)
+xdebug_str* xdebug_join(const char *delim, xdebug_arg *args, int begin, int end)
 {
 	int         i;
-	xdebug_str *ret;
+	xdebug_str *ret = xdebug_str_new();
 
-	xdebug_str_ptr_init(ret);
 	if (begin < 0) {
 		begin = 0;
 	}
@@ -123,10 +127,10 @@ char *xdebug_join(char *delim, xdebug_arg *args, int begin, int end)
 		xdebug_str_add(ret, delim, 0);
 	}
 	xdebug_str_add(ret, args->args[end], 0);
-	return ret->d;
+	return ret;
 }
 
-void xdebug_explode(char *delim, char *str, xdebug_arg *args, int limit)
+void xdebug_explode(const char *delim, char *str, xdebug_arg *args, int limit)
 {
 	char *p1, *p2, *endp;
 
@@ -161,7 +165,7 @@ void xdebug_explode(char *delim, char *str, xdebug_arg *args, int limit)
 	}
 }
 
-char* xdebug_memnstr(char *haystack, char *needle, int needle_len, char *end)
+char* xdebug_memnstr(char *haystack, const char *needle, int needle_len, char *end)
 {
 	char *p = haystack;
 	char first = *needle;
@@ -406,7 +410,7 @@ long xdebug_crc32(const char *string, int str_len)
 }
 
 #ifndef PHP_WIN32
-static FILE *xdebug_open_file(char *fname, char *mode, char *extension, char **new_fname)
+static FILE *xdebug_open_file(char *fname, const char *mode, const char *extension, char **new_fname)
 {
 	FILE *fh;
 	char *tmp_fname;
@@ -425,7 +429,7 @@ static FILE *xdebug_open_file(char *fname, char *mode, char *extension, char **n
 	return fh;
 }
 
-static FILE *xdebug_open_file_with_random_ext(char *fname, char *mode, char *extension, char **new_fname)
+static FILE *xdebug_open_file_with_random_ext(char *fname, const char *mode, const char *extension, char **new_fname)
 {
 	FILE *fh;
 	char *tmp_fname;
@@ -445,7 +449,7 @@ static FILE *xdebug_open_file_with_random_ext(char *fname, char *mode, char *ext
 	return fh;
 }
 
-FILE *xdebug_fopen(char *fname, char *mode, char *extension, char **new_fname)
+FILE *xdebug_fopen(char *fname, const char *mode, const char *extension, char **new_fname)
 {
 	int   r;
 	FILE *fh;
@@ -557,7 +561,7 @@ int xdebug_format_output_filename(char **filename, char *format, char *script_na
 					break;
 
 				case 'p': /* pid */
-					xdebug_str_add(&fname, xdebug_sprintf("%ld", getpid()), 1);
+					xdebug_str_add(&fname, xdebug_sprintf(ZEND_ULONG_FMT, xdebug_get_pid()), 1);
 					break;
 
 				case 'r': /* random number */
@@ -644,7 +648,7 @@ int xdebug_format_output_filename(char **filename, char *format, char *script_na
 					char *char_ptr, *strval;
 					char *sess_name;
 
-					sess_name = zend_ini_string("session.name", sizeof("session.name"), 0);
+					sess_name = zend_ini_string((char*) "session.name", sizeof("session.name"), 0);
 
 					if (sess_name && Z_TYPE(PG(http_globals)[TRACK_VARS_COOKIE]) == IS_ARRAY &&
 						((data = zend_hash_str_find(Z_ARRVAL(PG(http_globals)[TRACK_VARS_COOKIE]), sess_name, strlen(sess_name))) != NULL) &&
@@ -711,7 +715,8 @@ int xdebug_format_file_link(char **filename, const char *error_filename, int err
 int xdebug_format_filename(char **formatted_name, const char *fmt, const char *default_fmt, const char *filename TSRMLS_DC)
 {
 	xdebug_str fname = XDEBUG_STR_INITIALIZER;
-	char *name, *parent, *ancester;
+	char *name;
+	xdebug_str *parent, *ancester;
 	const char *full = filename;
 	xdebug_arg *parts = (xdebug_arg*) xdmalloc(sizeof(xdebug_arg));
 	char *slash = xdebug_sprintf("%c", DEFAULT_SLASH);
@@ -723,10 +728,10 @@ int xdebug_format_filename(char **formatted_name, const char *fmt, const char *d
 	name = parts->args[parts->c - 1];
 	parent = parts->c > 1 ?
 		xdebug_join(slash, parts, parts->c - 2, parts->c - 1) :
-		xdstrdup(name);
+		xdebug_str_create_from_char(name);
 	ancester = parts->c > 2 ?
 		xdebug_join(slash, parts, parts->c - 3, parts->c - 1) :
-		xdstrdup(parent);
+		xdebug_str_copy(parent);
 
 	while (*format)
 	{
@@ -740,10 +745,10 @@ int xdebug_format_filename(char **formatted_name, const char *fmt, const char *d
 					xdebug_str_add(&fname, xdebug_sprintf("%s", name), 1);
 					break;
 				case 'p': /* parent */
-					xdebug_str_add(&fname, xdebug_sprintf("%s", parent), 1);
+					xdebug_str_add(&fname, xdebug_sprintf("%s", parent->d), 1);
 					break;
 				case 'a': /* ancester */
-					xdebug_str_add(&fname, xdebug_sprintf("%s", ancester), 1);
+					xdebug_str_add(&fname, xdebug_sprintf("%s", ancester->d), 1);
 					break;
 				case 'f': /* full path */
 					xdebug_str_add(&fname, xdebug_sprintf("%s", full), 1);
@@ -760,41 +765,11 @@ int xdebug_format_filename(char **formatted_name, const char *fmt, const char *d
 	}
 
 	xdfree(slash);
-	xdfree(ancester);
-	xdfree(parent);
+	xdebug_str_free(ancester);
+	xdebug_str_free(parent);
 	xdebug_arg_dtor(parts);
 
 	*formatted_name = fname.d;
 
 	return fname.l;
-}
-
-
-void xdebug_open_log(TSRMLS_D)
-{
-	/* initialize remote log file */
-	XG(remote_log_file) = NULL;
-	if (XG(remote_log) && strlen(XG(remote_log))) {
-		XG(remote_log_file) = xdebug_fopen(XG(remote_log), "a", NULL, NULL);
-	}
-	if (XG(remote_log_file)) {
-		char *timestr = xdebug_get_time();
-		fprintf(XG(remote_log_file), "Log opened at %s\n", timestr);
-		fflush(XG(remote_log_file));
-		xdfree(timestr);
-	} else if (strlen(XG(remote_log))) {
-		php_log_err(xdebug_sprintf("Xdebug could not open the remote debug file '%s'.", XG(remote_log)) TSRMLS_CC);
-	}
-}
-
-void xdebug_close_log(TSRMLS_D)
-{
-	if (XG(remote_log_file)) {
-		char *timestr = xdebug_get_time();
-		fprintf(XG(remote_log_file), "Log closed at %s\n\n", timestr);
-		fflush(XG(remote_log_file));
-		xdfree(timestr);
-		fclose(XG(remote_log_file));
-		XG(remote_log_file) = NULL;
-	}
 }

@@ -2,17 +2,18 @@
    +----------------------------------------------------------------------+
    | Xdebug                                                               |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2002-2017 Derick Rethans                               |
+   | Copyright (c) 2002-2018 Derick Rethans                               |
    +----------------------------------------------------------------------+
-   | This source file is subject to version 1.0 of the Xdebug license,    |
+   | This source file is subject to version 1.01 of the Xdebug license,   |
    | that is bundled with this package in the file LICENSE, and is        |
    | available at through the world-wide-web at                           |
-   | http://xdebug.derickrethans.nl/license.php                           |
+   | https://xdebug.org/license.php                                       |
    | If you did not receive a copy of the Xdebug license and are unable   |
    | to obtain it through the world-wide-web, please send a note to       |
-   | xdebug@derickrethans.nl so we can mail you a copy immediately.       |
+   | derick@xdebug.org so we can mail you a copy immediately.             |
    +----------------------------------------------------------------------+
-   | Authors: Harald Radi <harald.radi@nme.at>                            |
+   | Authors: Derick Rethans <derick@xdebug.org>                          |
+   |          Harald Radi <harald.radi@nme.at>                            |
    +----------------------------------------------------------------------+
  */
 
@@ -30,10 +31,8 @@ void xdebug_superglobals_dump_dtor(void *user, void *ptr)
 	free(ptr);
 }
 
-static void dump_hash_elem(zval *z, char *name, long index_key, char *elem, int html, xdebug_str *str TSRMLS_DC)
+static void dump_hash_elem(zval *z, const char *name, long index_key, const char *elem, int html, xdebug_str *str TSRMLS_DC)
 {
-	int  len;
-
 	if (html) {
 		if (elem) {
 			xdebug_str_add(str, xdebug_sprintf("<tr><td colspan='2' align='right' bgcolor='#eeeeec' valign='top'><pre>$%s['%s']&nbsp;=</pre></td>", name, elem), 1);
@@ -43,18 +42,22 @@ static void dump_hash_elem(zval *z, char *name, long index_key, char *elem, int 
 	}
 
 	if (z != NULL) {
-		char *val;
+		xdebug_str *val;
 
 		if (html) {
-			val = xdebug_get_zval_value_fancy(NULL, z, &len, 0, NULL TSRMLS_CC);
-			xdebug_str_add(str, xdebug_sprintf("<td colspan='3' bgcolor='#eeeeec'>"), 1);
-			xdebug_str_addl(str, val, len, 0);
-			xdebug_str_add(str, "</td>", 0);
+			val = xdebug_get_zval_value_fancy(NULL, z, 0, NULL);
+
+			xdebug_str_addl(str, "<td colspan='3' bgcolor='#eeeeec'>", 34, 0);
+			xdebug_str_add_str(str, val);
+			xdebug_str_addl(str, "</td>", 5, 0);
 		} else {
 			val = xdebug_get_zval_value(z, 0, NULL);
-			xdebug_str_add(str, xdebug_sprintf("\n   $%s['%s'] = %s", name, elem, val), 1);
+
+			xdebug_str_add(str, xdebug_sprintf("\n   $%s['%s'] = ", name, elem), 1);
+			xdebug_str_add_str(str, val);
 		}
-		xdfree(val);
+
+		xdebug_str_free(val);
 	} else {
 		/* not found */
 		if (html) {
@@ -69,7 +72,7 @@ static void dump_hash_elem(zval *z, char *name, long index_key, char *elem, int 
 	}
 }
 
-static int dump_hash_elem_va(zval *pDest, zend_ulong index_key, zend_string *hash_key, char *name, int html, xdebug_str *str)
+static int dump_hash_elem_va(zval *pDest, zend_ulong index_key, zend_string *hash_key, const char *name, int html, xdebug_str *str)
 {
 	if (HASH_KEY_IS_NUMERIC(hash_key)) {
 		dump_hash_elem(*((zval **) pDest), name, hash_key->h, NULL, html, str TSRMLS_CC);
@@ -80,7 +83,7 @@ static int dump_hash_elem_va(zval *pDest, zend_ulong index_key, zend_string *has
 	return SUCCESS;
 }
 
-static void dump_hash(xdebug_llist *l, char *name, int name_len, int html, xdebug_str *str TSRMLS_DC)
+static void dump_hash(xdebug_llist *l, const char *name, int name_len, int html, xdebug_str *str TSRMLS_DC)
 {
 	zval *z;
 	zend_ulong num;
@@ -153,7 +156,8 @@ char* xdebug_get_printable_superglobals(int html TSRMLS_DC)
 
 void xdebug_superglobals_dump_tok(xdebug_llist *l, char *str)
 {
-	char *tok, *sep = ",";
+	char *tok;
+	const char *sep = ",";
 
 	tok = strtok(str, sep);
 	while (tok != NULL) {
