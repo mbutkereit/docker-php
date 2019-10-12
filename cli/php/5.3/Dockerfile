@@ -1,5 +1,5 @@
 # There is an openssl compilation issue on jessie, so have to stick with wheezy
-FROM debian:wheezy
+FROM debian:stable
 # persistent / runtime deps
 RUN apt-get update && apt-get install -y ca-certificates curl libpcre3 librecode0 libsqlite3-0 libxml2 --no-install-recommends && rm -r /var/lib/apt/lists/*
 
