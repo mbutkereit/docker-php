@@ -2,17 +2,17 @@
    +----------------------------------------------------------------------+
    | Xdebug                                                               |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2002-2017 Derick Rethans                               |
+   | Copyright (c) 2002-2019 Derick Rethans                               |
    +----------------------------------------------------------------------+
-   | This source file is subject to version 1.0 of the Xdebug license,    |
+   | This source file is subject to version 1.01 of the Xdebug license,   |
    | that is bundled with this package in the file LICENSE, and is        |
    | available at through the world-wide-web at                           |
-   | http://xdebug.derickrethans.nl/license.php                           |
+   | https://xdebug.org/license.php                                       |
    | If you did not receive a copy of the Xdebug license and are unable   |
    | to obtain it through the world-wide-web, please send a note to       |
-   | xdebug@derickrethans.nl so we can mail you a copy immediately.       |
+   | derick@xdebug.org so we can mail you a copy immediately.             |
    +----------------------------------------------------------------------+
-   | Authors:  Derick Rethans <derick@xdebug.org>                         |
+   | Authors: Derick Rethans <derick@xdebug.org>                          |
    +----------------------------------------------------------------------+
  */
 
@@ -33,6 +33,7 @@
 #include "zend_hash.h"
 #include "xdebug_hash.h"
 #include "xdebug_llist.h"
+#include "xdebug_set.h"
 
 #define MICRO_IN_SEC 1000000.00
 
@@ -43,11 +44,12 @@
 char* xdebug_start_trace(char* fname, char *script_filename, long options TSRMLS_DC);
 void xdebug_stop_trace(TSRMLS_D);
 
-typedef struct xdebug_var {
-	char *name;
-	void *addr;
-	int   is_variadic;
-} xdebug_var;
+typedef struct xdebug_var_name {
+	char    *name;
+	size_t   length;
+	zval     data;
+	int      is_variadic;
+} xdebug_var_name;
 
 #define XFUNC_UNKNOWN        0x00
 #define XFUNC_NORMAL         0x01
@@ -60,10 +62,11 @@ typedef struct xdebug_var {
 #define XFUNC_INCLUDE_ONCE   0x12
 #define XFUNC_REQUIRE        0x13
 #define XFUNC_REQUIRE_ONCE   0x14
+#define XFUNC_MAIN           0x15
 
 #define XFUNC_ZEND_PASS      0x20
 
-#define XDEBUG_IS_FUNCTION(f) (f == XFUNC_NORMAL || f == XFUNC_STATIC_MEMBER || f == XFUNC_MEMBER)
+#define XDEBUG_IS_NORMAL_FUNCTION(f) ((f)->type == XFUNC_NORMAL || (f)->type == XFUNC_STATIC_MEMBER || (f)->type == XFUNC_MEMBER)
 
 #define XDEBUG_REGISTER_LONG_CONSTANT(__c) REGISTER_LONG_CONSTANT(#__c, __c, CONST_CS|CONST_PERSISTENT)
 
@@ -74,8 +77,8 @@ typedef struct xdebug_var {
 #define XDEBUG_BREAK         1
 #define XDEBUG_STEP          2
 
-#define XDEBUG_INTERNAL      1
-#define XDEBUG_EXTERNAL      2
+#define XDEBUG_BUILT_IN      1
+#define XDEBUG_USER_DEFINED  2
 
 #define XDEBUG_MAX_FUNCTION_LEN 1024
 
@@ -87,6 +90,15 @@ typedef struct xdebug_var {
 #define XDEBUG_CC_OPTION_UNUSED          1
 #define XDEBUG_CC_OPTION_DEAD_CODE       2
 #define XDEBUG_CC_OPTION_BRANCH_CHECK    4
+
+#define XDEBUG_LOG_ERR               1
+#define XDEBUG_LOG_WARN              3
+#define XDEBUG_LOG_COM               5
+#define XDEBUG_LOG_INFO              7
+#define XDEBUG_LOG_DEBUG            10
+#define XDEBUG_LOG_DEFAULT          "7" /* as a string, as that's what STD_PHP_INI_ENTRY wants */
+
+extern const char* xdebug_log_prefix[11];
 
 #define STATUS_STARTING   0
 #define STATUS_STOPPING   1
@@ -126,8 +138,6 @@ typedef struct xdebug_var {
 #define XDEBUG_ERROR_PROFILING_NOT_STARTED         800
 
 #define XDEBUG_ERROR_ENCODING_NOT_SUPPORTED        900
-
-#define ZEND_XDEBUG_VISITED 0x10000000
 
 typedef struct _xdebug_func {
 	char *class;
@@ -170,6 +180,7 @@ typedef struct _function_stack_entry {
 	/* function properties */
 	xdebug_func  function;
 	int          user_defined;
+	xdebug_set  *executable_lines_cache;
 
 	/* location properties */
 	unsigned int level;
@@ -179,15 +190,15 @@ typedef struct _function_stack_entry {
 	int          function_nr;
 
 	/* argument properties */
-	int          arg_done;
-	unsigned int varc;
-	xdebug_var   *var;
-	int          is_variadic;
-	zval        *return_value;
-	xdebug_llist *used_vars;
-	HashTable   *symbol_table;
+	int                arg_done;
+	unsigned int       varc;
+	xdebug_var_name   *var;
+	int                is_variadic;
+	zval              *return_value;
+	xdebug_llist      *declared_vars;
+	HashTable         *symbol_table;
 	zend_execute_data *execute_data;
-	zval        *This;
+	zval              *This;
 
 	/* filter properties */
 	long         filtered_tracing;
@@ -228,12 +239,11 @@ typedef struct
 	void (*function_exit)(void *ctxt, function_stack_entry *fse, int function_nr TSRMLS_DC);
 	void (*return_value)(void *ctxt, function_stack_entry *fse, int function_nr, zval *return_value TSRMLS_DC);
 	void (*generator_return_value)(void *ctxt, function_stack_entry *fse, int function_nr, zend_generator *generator TSRMLS_DC);
-	void (*assignment)(void *ctxt, function_stack_entry *fse, char *full_varname, zval *value, char *right_full_varname, char *op, char *file, int lineno TSRMLS_DC);
+	void (*assignment)(void *ctxt, function_stack_entry *fse, char *full_varname, zval *value, char *right_full_varname, const char *op, char *file, int lineno TSRMLS_DC);
 } xdebug_trace_handler_t;
 
 
-xdebug_hash* xdebug_used_var_hash_from_llist(xdebug_llist *list);
-void xdebug_init_debugger(TSRMLS_D);
+xdebug_hash* xdebug_declared_var_hash_from_llist(xdebug_llist *list);
 
 #endif
 

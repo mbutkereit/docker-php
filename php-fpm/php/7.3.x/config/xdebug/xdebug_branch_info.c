@@ -1,12 +1,12 @@
 /*
    +----------------------------------------------------------------------+
-   | Copyright (c) 1997-2017 Derick Rethans                               |
+   | Copyright (c) 1997-2018 Derick Rethans                               |
    +----------------------------------------------------------------------+
    | This source file is subject to the 2-Clause BSD license which is     |
    | available through the LICENSE file, or online at                     |
    | http://opensource.org/licenses/bsd-license.php                       |
    +----------------------------------------------------------------------+
-   | Authors:  Derick Rethans <derick@derickrethans.nl>                   |
+   | Authors: Derick Rethans <derick@derickrethans.nl>                    |
    +----------------------------------------------------------------------+
  */
 #include <stdlib.h>
@@ -67,6 +67,9 @@ void xdebug_branch_info_update(xdebug_branch_info *branch_info, unsigned int pos
 static void only_leave_first_catch(zend_op_array *opa, xdebug_branch_info *branch_info, int position)
 {
 	unsigned int exit_jmp;
+#if PHP_VERSION_ID >= 70300 && ZEND_USE_ABS_JMP_ADDR
+	zend_op *base_address = &(opa->opcodes[0]);
+#endif
 
 	if (opa->opcodes[position].opcode == ZEND_FETCH_CLASS) {
 		position++;
@@ -78,11 +81,16 @@ static void only_leave_first_catch(zend_op_array *opa, xdebug_branch_info *branc
 
 	xdebug_set_remove(branch_info->entry_points, position);
 
-	if (!opa->opcodes[position].result.num) {
-#if PHP_VERSION_ID >= 70100
-		exit_jmp = position + ((signed int) opa->opcodes[position].extended_value / sizeof(zend_op));
+#if PHP_VERSION_ID >= 70300
+	if (!(opa->opcodes[position].extended_value & ZEND_LAST_CATCH)) {
+		exit_jmp = XDEBUG_ZNODE_JMP_LINE(opa->opcodes[position].op2, position, base_address);
 #else
+	if (!opa->opcodes[position].result.num) {
+# if PHP_VERSION_ID >= 70100
+		exit_jmp = position + ((signed int) opa->opcodes[position].extended_value / sizeof(zend_op));
+# else
 		exit_jmp = opa->opcodes[position].extended_value;
+# endif
 #endif
 
 		if (opa->opcodes[exit_jmp].opcode == ZEND_FETCH_CLASS) {
@@ -98,12 +106,23 @@ void xdebug_branch_post_process(zend_op_array *opa, xdebug_branch_info *branch_i
 {
 	unsigned int i;
 	int          in_branch = 0, last_start = -1;
+#if PHP_VERSION_ID >= 70300 && ZEND_USE_ABS_JMP_ADDR
+	zend_op *base_address = &(opa->opcodes[0]);
+#endif
 
 	/* Figure out which CATCHes are chained, and hence which ones should be
 	 * considered entry points */
 	for (i = 0; i < branch_info->entry_points->size; i++) {
 		if (xdebug_set_in(branch_info->entry_points, i) && opa->opcodes[i].opcode == ZEND_CATCH) {
-#if PHP_VERSION_ID >= 70100
+#if PHP_VERSION_ID >= 70300
+# if ZEND_USE_ABS_JMP_ADDR
+			if (opa->opcodes[i].op2.jmp_addr != NULL) {
+# else
+			if (opa->opcodes[i].op2.jmp_offset != 0) {
+# endif
+				only_leave_first_catch(opa, branch_info, XDEBUG_ZNODE_JMP_LINE(opa->opcodes[i].op2, i, base_address));
+			}
+#elif PHP_VERSION_ID >= 70100
 			only_leave_first_catch(opa, branch_info, i + ((signed int) opa->opcodes[i].extended_value / sizeof(zend_op)));
 #else
 			only_leave_first_catch(opa, branch_info, opa->opcodes[i].extended_value);
@@ -339,10 +358,10 @@ void xdebug_branch_info_mark_reached(char *file_name, char *function_name, zend_
 	xdebug_coverage_function *function;
 	xdebug_branch_info *branch_info;
 
-	if (strcmp(XG(previous_mark_filename), file_name) == 0) {
+	if (XG(previous_mark_filename) && strcmp(XG(previous_mark_filename), file_name) == 0) {
 		file = XG(previous_mark_file);
 	} else {
-		if (!xdebug_hash_find(XG(code_coverage), file_name, strlen(file_name), (void *) &file)) {
+		if (!xdebug_hash_find(XG(code_coverage_info), file_name, strlen(file_name), (void *) &file)) {
 			return;
 		}
 		XG(previous_mark_filename) = file->name;
@@ -401,10 +420,10 @@ void xdebug_branch_info_mark_end_of_function_reached(char *filename, char *funct
 	xdebug_branch_info *branch_info;
 	xdebug_path *path;
 
-	if (strcmp(XG(previous_mark_filename), filename) == 0) {
+	if (XG(previous_mark_filename) && strcmp(XG(previous_mark_filename), filename) == 0) {
 		file = XG(previous_mark_file);
 	} else {
-		if (!xdebug_hash_find(XG(code_coverage), filename, strlen(filename), (void *) &file)) {
+		if (!xdebug_hash_find(XG(code_coverage_info), filename, strlen(filename), (void *) &file)) {
 			return;
 		}
 		XG(previous_mark_filename) = file->name;
@@ -434,15 +453,15 @@ void xdebug_branch_info_add_branches_and_paths(char *filename, char *function_na
 	xdebug_coverage_file *file;
 	xdebug_coverage_function *function;
 
-	if (strcmp(XG(previous_filename), filename) == 0) {
+	if (XG(previous_filename) && strcmp(XG(previous_filename), filename) == 0) {
 		file = XG(previous_file);
 	} else {
 		/* Check if the file already exists in the hash */
-		if (!xdebug_hash_find(XG(code_coverage), filename, strlen(filename), (void *) &file)) {
+		if (!xdebug_hash_find(XG(code_coverage_info), filename, strlen(filename), (void *) &file)) {
 			/* The file does not exist, so we add it to the hash */
 			file = xdebug_coverage_file_ctor(filename);
 
-			xdebug_hash_add(XG(code_coverage), filename, strlen(filename), file);
+			xdebug_hash_add(XG(code_coverage_info), filename, strlen(filename), file);
 		}
 		XG(previous_filename) = file->name;
 		XG(previous_file) = file;

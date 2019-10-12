@@ -2,15 +2,15 @@
    +----------------------------------------------------------------------+
    | Xdebug                                                               |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2002-2017 Derick Rethans                               |
+   | Copyright (c) 2002-2018 Derick Rethans                               |
    +----------------------------------------------------------------------+
-   | This source file is subject to version 1.0 of the Xdebug license,    |
+   | This source file is subject to version 1.01 of the Xdebug license,   |
    | that is bundled with this package in the file LICENSE, and is        |
    | available at through the world-wide-web at                           |
-   | http://xdebug.derickrethans.nl/license.php                           |
+   | https://xdebug.org/license.php                                       |
    | If you did not receive a copy of the Xdebug license and are unable   |
    | to obtain it through the world-wide-web, please send a note to       |
-   | xdebug@derickrethans.nl so we can mail you a copy immediately.       |
+   | derick@xdebug.org so we can mail you a copy immediately.             |
    +----------------------------------------------------------------------+
    | Authors: Derick Rethans <derick@xdebug.org>                          |
    +----------------------------------------------------------------------+
@@ -86,9 +86,9 @@ char *xdebug_trace_textual_get_filename(void *ctxt TSRMLS_DC)
 	return context->trace_filename;
 }
 
-void add_single_value(xdebug_str *str, zval *zv, int collection_level TSRMLS_DC)
+static void add_single_value(xdebug_str *str, zval *zv, int collection_level TSRMLS_DC)
 {
-	char *tmp_value;
+	xdebug_str *tmp_value = NULL;
 
 	switch (collection_level) {
 		case 1: /* synopsis */
@@ -101,11 +101,12 @@ void add_single_value(xdebug_str *str, zval *zv, int collection_level TSRMLS_DC)
 			tmp_value = xdebug_get_zval_value(zv, 0, NULL);
 			break;
 		case 5: /* serialized */
-			tmp_value = xdebug_get_zval_value_serialized(zv, 0, NULL TSRMLS_CC);
+			tmp_value = xdebug_get_zval_value_serialized(zv, 0, NULL);
 			break;
 	}
 	if (tmp_value) {
-		xdebug_str_add(str, tmp_value, 1);
+		xdebug_str_add_str(str, tmp_value);
+		xdebug_str_free(tmp_value);
 	} else {
 		xdebug_str_add(str, "???", 0);
 	}
@@ -146,7 +147,7 @@ void xdebug_trace_textual_function_entry(void *ctxt, function_stack_entry *fse, 
 			}
 
 			if (
-				(fse->var[j].is_variadic && fse->var[j].addr)
+				(fse->var[j].is_variadic && Z_ISUNDEF(fse->var[j].data))
 			) {
 				xdebug_str_add(&str, "...", 0);
 				variadic_opened = 1;
@@ -157,7 +158,7 @@ void xdebug_trace_textual_function_entry(void *ctxt, function_stack_entry *fse, 
 				xdebug_str_add(&str, xdebug_sprintf("$%s = ", fse->var[j].name), 1);
 			}
 
-			if (fse->var[j].is_variadic && fse->var[j].addr) {
+			if (fse->var[j].is_variadic && Z_ISUNDEF(fse->var[j].data)) {
 				xdebug_str_add(&str, "variadic(", 0);
 				continue;
 			}
@@ -168,8 +169,8 @@ void xdebug_trace_textual_function_entry(void *ctxt, function_stack_entry *fse, 
 				xdebug_str_add(&str, xdebug_sprintf("%d => ", variadic_count++), 1);
 			}
 
-			if (fse->var[j].addr) {
-				add_single_value(&str, fse->var[j].addr, XG(collect_params) TSRMLS_CC);
+			if (!Z_ISUNDEF(fse->var[j].data)) {
+				add_single_value(&str, &fse->var[j].data, XG(collect_params) TSRMLS_CC);
 			} else {
 				xdebug_str_addl(&str, "???", 3, 0);
 			}
@@ -184,7 +185,11 @@ void xdebug_trace_textual_function_entry(void *ctxt, function_stack_entry *fse, 
 		if (fse->function.type == XFUNC_EVAL) {
 			zend_string *i_filename = zend_string_init(fse->include_filename, strlen(fse->include_filename), 0);
 			zend_string *escaped;
-			escaped = php_addcslashes(i_filename, 0, "'\\\0..\37", 6);
+#if PHP_VERSION_ID >= 70300
+			escaped = php_addcslashes(i_filename, (char*) "'\\\0..\37", 6);
+#else
+			escaped = php_addcslashes(i_filename, 0, (char*) "'\\\0..\37", 6);
+#endif
 			xdebug_str_add(&str, xdebug_sprintf("'%s'", escaped->val), 1);
 			zend_string_release(escaped);
 			zend_string_release(i_filename);
@@ -222,28 +227,29 @@ static void xdebug_return_trace_stack_common(xdebug_str *str, function_stack_ent
 void xdebug_trace_textual_function_return_value(void *ctxt, function_stack_entry *fse, int function_nr, zval *return_value TSRMLS_DC)
 {
 	xdebug_trace_textual_context *context = (xdebug_trace_textual_context*) ctxt;
-	xdebug_str str = XDEBUG_STR_INITIALIZER;
-	char      *tmp_value;
+	xdebug_str                    str = XDEBUG_STR_INITIALIZER;
+	xdebug_str                   *tmp_value;
 
 	xdebug_return_trace_stack_common(&str, fse TSRMLS_CC);
 
 	tmp_value = xdebug_get_zval_value(return_value, 0, NULL);
 	if (tmp_value) {
-		xdebug_str_add(&str, tmp_value, 1);
+		xdebug_str_add_str(&str, tmp_value);
+		xdebug_str_free(tmp_value);
 	}
 	xdebug_str_addl(&str, "\n", 2, 0);
 
 	fprintf(context->trace_file, "%s", str.d);
 	fflush(context->trace_file);
 
-	xdfree(str.d);
+	xdebug_str_destroy(&str);
 }
 
 void xdebug_trace_textual_generator_return_value(void *ctxt, function_stack_entry *fse, int function_nr, zend_generator *generator TSRMLS_DC)
 {
 	xdebug_trace_textual_context *context = (xdebug_trace_textual_context*) ctxt;
-	xdebug_str str = XDEBUG_STR_INITIALIZER;
-	char      *tmp_value = NULL;
+	xdebug_str                    str = XDEBUG_STR_INITIALIZER;
+	xdebug_str                   *tmp_value = NULL;
 
 	if (! (generator->flags & ZEND_GENERATOR_CURRENTLY_RUNNING)) {
 		return;
@@ -261,29 +267,31 @@ void xdebug_trace_textual_generator_return_value(void *ctxt, function_stack_entr
 		xdebug_return_trace_stack_common(&str, fse TSRMLS_CC);
 
 		xdebug_str_addl(&str, "(", 1, 0);
-		xdebug_str_add(&str, tmp_value, 1);
+		xdebug_str_add_str(&str, tmp_value);
 		xdebug_str_addl(&str, " => ", 4, 0);
 
 		tmp_value = xdebug_get_zval_value(&generator->value, 0, NULL);
 		if (tmp_value) {
-			xdebug_str_add(&str, tmp_value, 1);
+			xdebug_str_add_str(&str, tmp_value);
+			xdebug_str_free(tmp_value);
 		}
+
 		xdebug_str_addl(&str, ")", 1, 0);
 		xdebug_str_addl(&str, "\n", 2, 0);
 
 		fprintf(context->trace_file, "%s", str.d);
 		fflush(context->trace_file);
 
-		xdfree(str.d);
+		xdebug_str_destroy(&str);
 	}
 }
 
-void xdebug_trace_textual_assignment(void *ctxt, function_stack_entry *fse, char *full_varname, zval *retval, char *right_full_varname, char *op, char *filename, int lineno TSRMLS_DC)
+void xdebug_trace_textual_assignment(void *ctxt, function_stack_entry *fse, char *full_varname, zval *retval, char *right_full_varname, const char *op, char *filename, int lineno TSRMLS_DC)
 {
 	xdebug_trace_textual_context *context = (xdebug_trace_textual_context*) ctxt;
-	unsigned int j = 0;
-	xdebug_str str = XDEBUG_STR_INITIALIZER;
-	char      *tmp_value;
+	unsigned int                  j = 0;
+	xdebug_str                    str = XDEBUG_STR_INITIALIZER;
+	xdebug_str                   *tmp_value;
 
 	xdebug_str_addl(&str, "                    ", 20, 0);
 	if (XG(show_mem_delta)) {
@@ -305,7 +313,8 @@ void xdebug_trace_textual_assignment(void *ctxt, function_stack_entry *fse, char
 			tmp_value = xdebug_get_zval_value(retval, 0, NULL);
 
 			if (tmp_value) {
-				xdebug_str_add(&str, tmp_value, 1);
+				xdebug_str_add_str(&str, tmp_value);
+				xdebug_str_free(tmp_value);
 			} else {
 				xdebug_str_addl(&str, "NULL", 4, 0);
 			}

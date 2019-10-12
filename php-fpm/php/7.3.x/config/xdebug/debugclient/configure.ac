@@ -1,4 +1,3 @@
-dnl $Id: configure.in,v 1.7 2009-07-05 19:57:59 derick Exp $
 dnl
 dnl Process this file with autoconf to produce a configure script.
 dnl
@@ -8,13 +7,11 @@ dnl divert(1)
 dnl
 dnl Start
 dnl
-AC_INIT([main.c])
+AC_INIT(debugclient, 0.12.0)
 AC_PREREQ(2.59)
 AC_PREFIX_DEFAULT([/usr/local])
 
-AM_INIT_AUTOMAKE(debugclient, $VERSION)
 AC_CONFIG_HEADERS(config.h)
-AM_MAINTAINER_MODE
 AC_CANONICAL_HOST
 
 # This is needed if SUBDIRS is set
@@ -33,9 +30,6 @@ then
 else
   AC_PATH_PROG(AS, as, as)
 fi
-
-dnl AM_PROG_LIBTOOL
-AC_PROG_INSTALL
 
 dnl
 dnl Checks for needed header files.
@@ -72,8 +66,6 @@ dnl Debug section:
 dnl
 dnl Debug on/off [default: OFF]
 dnl
-XDEBUG_HELP_SEPARATOR(DEBUGGING:)
-
 AC_MSG_CHECKING([whether to enable debugging])
 AC_ARG_ENABLE(debug,
 [  --enable-debug          Enable debugging.],
@@ -186,17 +178,7 @@ case $host_alias in
 esac
           
 
-AC_SUBST(XDEBUG_MODULES)
-AC_SUBST(XDEBUG_STATIC_MODULES)
-AC_SUBST(XDEBUG_STATIC_LDADD)
-AC_SUBST(XDEBUG_MOD_MAKEFILES)
-AC_SUBST(INCLUDES)
-
 dnl
 dnl Output 
 dnl
-AC_OUTPUT([Makefile], [], [
-  if test "\$CONFIG_FILES" = "$MAKES" || test -z "\$CONFIG_FILES"; then
-    REDO_ALL=yes
-  fi
-])
+AC_OUTPUT(Makefile)
